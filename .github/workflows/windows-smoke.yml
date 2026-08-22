@@ -57,3 +57,26 @@ jobs:
           $zip = '${{ github.event.inputs.zip }}'
           if (-not $zip) { $zip = 'test-package.zip' }
           ./build/windows-smoke-test.ps1 -ZipPath $zip
+
+      # THE CHECK THIS SUITE DID NOT HAVE, and the reason a broken build passed 53 tests.
+      #
+      # Everything above proves the SERVER works: the smoke test spawns server.mjs itself and
+      # drives the protocol by hand. It says nothing about whether Claude Code ATTACHED it.
+      # On 2026-08-22 a live Windows session opened with all eleven tools missing while this
+      # suite was fully green, because the plugin-declared server does not attach on Windows.
+      #
+      # `claude mcp list` health-checks the configured servers and needs no sign-in, so the
+      # client's own view of the registration is testable on a runner with no credentials.
+      - name: Claude Code attaches the coach server
+        shell: pwsh
+        run: |
+          $profileDir = "$env:USERPROFILE\.claude-bill-career-coach"
+          if (-not (Test-Path "$profileDir\.claude.json")) {
+            throw "no user-scope registration at $profileDir\.claude.json — the installer did not write it"
+          }
+          $env:CLAUDE_CONFIG_DIR = $profileDir
+          $out = (& claude mcp list 2>&1 | Out-String)
+          Write-Host $out
+          if ($out -notmatch 'bill-coach') { throw "the client does not see the coach server at all" }
+          if ($out -notmatch 'bill-coach.*(Connected|\u2714)') { throw "the coach server is registered but did not connect" }
+          Write-Host "attached and connected"

@@ -208,6 +208,34 @@ try {
     Write-Host "  (session-test.mjs not found next to this script; skipping)" -ForegroundColor Yellow
   }
 
+  # ---------------------------------------------------------------- hardening
+  # Adversarial probes: two windows at once, a hard kill, hostile text, unreadable
+  # dates, a corrupt database. Windows is where the file locking actually bites.
+  Section 'Hardening probes'
+  $hardScript = Join-Path $PSScriptRoot 'hardening-test.mjs'
+  if (Test-Path $hardScript) {
+    $hardOut = (& node $hardScript $pkg 2>&1 | Out-String)
+    Write-Host $hardOut
+    Check ($hardOut -match 'HARDENING PROBES PASSED') 'hardening probes passed' `
+      (($hardOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else {
+    Write-Host '  (hardening-test.mjs not found; skipping)' -ForegroundColor Yellow
+  }
+
+  # ---------------------------------------------------------------- controls
+  # start_coach / end_coach, what the next session can see, and what happens when
+  # the window is simply closed with no end_coach at all.
+  Section 'Session controls'
+  $ctrlScript = Join-Path $PSScriptRoot 'session-controls-test.mjs'
+  if (Test-Path $ctrlScript) {
+    $ctrlOut = (& node $ctrlScript $pkg 2>&1 | Out-String)
+    Write-Host $ctrlOut
+    Check ($ctrlOut -match 'SESSION CONTROL TESTS PASSED') 'session control tests passed' `
+      (($ctrlOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else {
+    Write-Host '  (session-controls-test.mjs not found; skipping)' -ForegroundColor Yellow
+  }
+
   # ---------------------------------------------------------------- idempotent
   Section 'Re-run (idempotency)'
   Push-Location $pkg

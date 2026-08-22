@@ -29,7 +29,8 @@ param(
   [Parameter(Mandatory = $true)][string]$ZipPath,
   [string]$CoachHome,
   [switch]$NoClaudeInstall,
-  [switch]$KeepArtifacts
+  [switch]$KeepArtifacts,
+  [string]$OldPkg = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -269,6 +270,20 @@ try {
     Check ($confOut -match 'DOCTRINE CONFORMANCE PASSED') 'doctrine conformance passed' `
       (($confOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
   } else { Write-Host '  (doctrine-conformance-test.mjs not found; skipping)' -ForegroundColor Yellow }
+
+  # ---------------------------------------------------------------- migration
+  # Schema 2 renames people -> principal_profile. It runs against Bill's live memory,
+  # so it is proven here against a real pre-1.3 database with rows in it.
+  Section 'Schema migration'
+  $migScript = Join-Path $PSScriptRoot 'migration-test.mjs'
+  if ((Test-Path $migScript) -and (Test-Path $OldPkg)) {
+    $migOut = (& node $migScript $OldPkg $pkg 2>&1 | Out-String)
+    Write-Host $migOut
+    Check ($migOut -match 'MIGRATION TESTS PASSED') 'migration tests passed' `
+      (($migOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else {
+    Write-Host '  (no pre-1.3 package to migrate from; skipping)' -ForegroundColor Yellow
+  }
 
   # ---------------------------------------------------------------- idempotent
   Section 'Re-run (idempotency)'

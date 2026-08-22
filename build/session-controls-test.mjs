@@ -26,9 +26,9 @@ fs.copyFileSync(path.join(pkg, 'library', 'library.sqlite'), path.join(dataDir, 
 console.log(`data dir: ${dataDir}`);
 console.log(`platform: ${process.platform} / node ${process.versions.node}`);
 
-function startServer() {
+function startServer(dir = dataDir) {
   const child = spawn(process.execPath, [path.join(pkg, 'plugin', 'runtime', 'server.mjs')], {
-    env: { ...process.env, BILL_COACH_DATA_DIR: dataDir }, stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, BILL_COACH_DATA_DIR: dir }, stdio: ['pipe', 'pipe', 'pipe'],
   });
   let buf = '', stderr = '', id = 1;
   const pending = new Map();
@@ -86,6 +86,67 @@ await s.ready();
     session_id: a.data.session_id, expected_session_version: done.data?.session_version ?? 2,
     judgment: 'onboarding done', next_move: 'start work',
   });
+}
+
+// ---------------------------------------------------------------- the skip
+// Bill has been through onboarding before — during the reinstall loop, more than
+// once. Skipping has to finish setup properly, not leave it half-done.
+section('Skipping onboarding');
+{
+  // A fresh store, so this is a genuine first run rather than an already-complete one.
+  const skipDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bill-skip-'));
+  fs.mkdirSync(path.join(skipDir, 'state'), { recursive: true });
+  fs.mkdirSync(path.join(skipDir, 'library'), { recursive: true });
+  fs.copyFileSync(path.join(pkg, 'state-template', 'coach.sqlite'), path.join(skipDir, 'state', 'coach.sqlite'));
+  fs.copyFileSync(path.join(pkg, 'library', 'library.sqlite'), path.join(skipDir, 'library', 'library.sqlite'));
+
+  let sk = startServer(skipDir);
+  await sk.ready();
+  const first = await sk.call('start_coach', { user_message: 'hello again', now: iso() });
+  check(first.data?.mode === 'onboarding', 'a fresh store starts in onboarding');
+  const contract = JSON.stringify(first.data);
+  check(/skip/i.test(contract), 'the contract offers Bill a way to skip', contract.slice(0, 200));
+
+  // "skip" in one move: complete, with a picture recording that he skipped.
+  const skipped = await sk.call('save_coaching_state', {
+    session_id: first.data.session_id, expected_session_version: first.data.session_version,
+    onboarding: {
+      status: 'complete',
+      confirmed_picture: 'Bill skipped the walkthrough — he has done it before. The seeded picture stands until he corrects it.',
+    },
+    session: { status: 'active', evidence_ids: [], open_questions: [] },
+  });
+  check(skipped.ok && !(skipped.data?.conflicts ?? []).length, 'a skip completes onboarding in one save',
+    JSON.stringify(skipped.data).slice(0, 250));
+  await sk.call('end_coach', { session_id: first.data.session_id, expected_session_version: skipped.data.session_version, judgment: 'skipped', next_move: 'work' });
+  await sk.stop();
+
+  sk = startServer(skipDir);
+  await sk.ready();
+  const afterSkip = await sk.call('start_coach', { user_message: 'right, lets get to work', now: iso() });
+  check(afterSkip.data?.mode !== 'onboarding', `the next session is ordinary work (mode ${afterSkip.data?.mode})`);
+  check(!/pane_/.test(JSON.stringify(afterSkip.data)), 'no pane is presented after a skip');
+  const blob = JSON.stringify(afterSkip.data);
+  check(/principal_profile/.test(blob), 'the seeded principal model is in orientation after a skip', blob.slice(0, 250));
+  check(/"confirmed":0/.test(blob), 'and it is carried as UNCONFIRMED — a proposal, not a fact about him',
+    blob.slice(0, 250));
+
+  // Onboarding must never reopen once skipped.
+  const reopen = await sk.call('save_coaching_state', {
+    session_id: afterSkip.data.session_id, expected_session_version: afterSkip.data.session_version,
+    onboarding: { status: 'pane_3' },
+    session: { status: 'active', evidence_ids: [], open_questions: [] },
+  });
+  await sk.stop();
+  sk = startServer(skipDir);
+  await sk.ready();
+  const stillDone = await sk.call('start_coach', { user_message: 'hello', now: iso() });
+  check(stillDone.data?.mode !== 'onboarding', 'onboarding cannot be reopened after a skip',
+    `mode=${stillDone.data?.mode}, reopen=${JSON.stringify(reopen.data).slice(0, 120)}`);
+  await sk.stop();
+  fs.rmSync(skipDir, { recursive: true, force: true });
+  s = startServer();
+  await s.ready();
 }
 
 // ---------------------------------------------------------------- a real working session

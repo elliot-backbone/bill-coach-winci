@@ -104,6 +104,27 @@ jobs:
           Write-Host "--- health check, cmd /c wrapper ---"
           & claude mcp list 2>&1 | Select-Object -Last 6
 
+      - name: The launcher's actual flag path, with MCP debug logging
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # All three config VARIANTS connect when the server is user-scoped. The launcher does
+          # not use user scope: it passes --mcp-config as a FLAG. This runs that exact flag path
+          # and keeps the debug log, which records MCP startup. Authentication will fail, but the
+          # question is whether the server was attached BEFORE that point.
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:CLAUDE_CONFIG_DIR = $d
+          Write-Host "--- claude --debug=mcp with the launcher's flags ---"
+          & claude --debug=mcp --setting-sources user --strict-mcp-config --mcp-config "$d\mcp\coach-mcp.json" --tools WebSearch,WebFetch -p "reply OK" 2>&1 | Select-Object -First 40
+          Write-Host "--- exit code: $LASTEXITCODE ---"
+          Write-Host "--- debug logs written under the sealed profile ---"
+          if (Test-Path "$d\debug") {
+            Get-ChildItem "$d\debug" -Filter *.txt | ForEach-Object {
+              Write-Host "=== $($_.Name) ==="
+              Get-Content $_.FullName | Select-String -Pattern "mcp|server|spawn|ENOENT|strict|config" -CaseSensitive:$false | Select-Object -First 40
+            }
+          } else { Write-Host "(no debug directory)" }
+
       - name: If anything failed, read the server stderr the docs point at
         if: always()
         shell: pwsh

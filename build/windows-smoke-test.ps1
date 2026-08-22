@@ -286,17 +286,16 @@ try {
   }
 
   # ---------------------------------------------------------------- voice
-  # The Stop hook is where the AI-writing register stops being advice. It cannot be
-  # exercised from a headless run — `claude -p` does not fire Stop hooks — so it is
-  # driven directly here, on the platform Bill actually uses.
-  Section 'Voice guard'
-  $voiceScript = Join-Path $PSScriptRoot 'voice-guard-test.mjs'
+  # Enforcement is the model's own three-level panel, so what is checked here is that
+  # the layer REACHES it on every session and that the reference authorities load.
+  Section 'Voice layer'
+  $voiceScript = Join-Path $PSScriptRoot 'voice-layer-test.mjs'
   if (Test-Path $voiceScript) {
     $voiceOut = (& node $voiceScript $pkg 2>&1 | Out-String)
     Write-Host $voiceOut
-    Check ($voiceOut -match 'VOICE GUARD TESTS PASSED') 'voice guard tests passed' `
+    Check ($voiceOut -match 'VOICE LAYER TESTS PASSED') 'voice layer tests passed' `
       (($voiceOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
-  } else { Write-Host '  (voice-guard-test.mjs not found; skipping)' -ForegroundColor Yellow }
+  } else { Write-Host '  (voice-layer-test.mjs not found; skipping)' -ForegroundColor Yellow }
 
   # ---------------------------------------------------------------- idempotent
   Section 'Re-run (idempotency)'

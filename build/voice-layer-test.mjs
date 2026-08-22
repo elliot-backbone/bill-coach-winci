@@ -109,8 +109,18 @@ console.log('\n== the coach server reaches Claude Code ==');
   check(!/'--mcp-config'/.test(launcher),
     'the launcher does not pass --mcp-config',
     'servers supplied that way attach asynchronously and lose the race with the opening prompt');
-  check(fs.existsSync(path.join(pkg, 'plugin', '.mcp.json')),
-    'the plugin ships its own .mcp.json, which is how the server is registered');
+  // MEASURED on a live Windows runner, 2026-08-22: plugin-declared servers do not attach
+  // there. The registration Claude Code honours on both platforms is user scope, so the
+  // plugin must NOT declare a second one — a path that works on only one OS is worse than
+  // no path, because it makes a macOS test look like proof.
+  check(!fs.existsSync(path.join(pkg, 'plugin', '.mcp.json')),
+    'the plugin declares no server of its own',
+    'a plugin-scoped server does not attach on Windows and hides the failure on macOS');
+  const installer = fs.readFileSync(path.join(pkg, 'install', 'install.mjs'), 'utf8');
+  check(/writeUserScopeMcp/.test(installer),
+    'the installer registers the server in the profile user scope');
+  check(/registrationPresent/.test(launcher),
+    'the launcher refuses to open a session with no registration');
   check(/serverAnswers|initialize/.test(launcher),
     'the launcher handshakes with the runtime before handing over',
     'existence checks cannot tell a working runtime from a silent one');

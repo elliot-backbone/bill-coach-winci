@@ -285,6 +285,19 @@ try {
     Write-Host '  (no pre-1.3 package to migrate from; skipping)' -ForegroundColor Yellow
   }
 
+  # ---------------------------------------------------------------- voice
+  # The Stop hook is where the AI-writing register stops being advice. It cannot be
+  # exercised from a headless run — `claude -p` does not fire Stop hooks — so it is
+  # driven directly here, on the platform Bill actually uses.
+  Section 'Voice guard'
+  $voiceScript = Join-Path $PSScriptRoot 'voice-guard-test.mjs'
+  if (Test-Path $voiceScript) {
+    $voiceOut = (& node $voiceScript $pkg 2>&1 | Out-String)
+    Write-Host $voiceOut
+    Check ($voiceOut -match 'VOICE GUARD TESTS PASSED') 'voice guard tests passed' `
+      (($voiceOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else { Write-Host '  (voice-guard-test.mjs not found; skipping)' -ForegroundColor Yellow }
+
   # ---------------------------------------------------------------- idempotent
   Section 'Re-run (idempotency)'
   Push-Location $pkg

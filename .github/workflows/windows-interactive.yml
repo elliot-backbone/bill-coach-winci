@@ -118,6 +118,24 @@ jobs:
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: true
+          # Detached, so this step COMPLETES and its log becomes readable through the API.
+          # Attached, the step stays in progress for the whole session and GitHub serves no
+          # log for it, which left the connection string visible only in the web UI.
+          detached: true
+
+      - name: Hold the runner open
+        shell: pwsh
+        run: |
+          $minutes = [int]'${{ github.event.inputs.minutes }}'
+          Write-Host "Session open for $minutes minutes. Connect with the SSH command above."
+          Write-Host "It ends early if you delete the file below from inside the session:"
+          Write-Host "  $env:RUNNER_TEMP\keep-open"
+          New-Item -ItemType File -Path "$env:RUNNER_TEMP\keep-open" -Force | Out-Null
+          $deadline = (Get-Date).AddMinutes($minutes)
+          while ((Get-Date) -lt $deadline -and (Test-Path "$env:RUNNER_TEMP\keep-open")) {
+            Start-Sleep -Seconds 15
+          }
+          Write-Host "Session closing."
 
       - name: Leave nothing behind
         if: always()

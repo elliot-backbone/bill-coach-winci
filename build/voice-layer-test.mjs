@@ -93,6 +93,31 @@ const eb = exemplars.filter((v) => v.severity === 'block').length;
 note(`approved walkthrough panes: ${eb} block-severity, ${exemplars.length - eb} flag`);
 note('these numbers exist to be read by a person, not to fail a build');
 
+// THE TOOLS MUST REACH THE MODEL, and the launcher must refuse when they cannot.
+//
+// MEASURED 2026-08-22 in a live Windows session: Coach opened with web search and fetch and
+// nothing else, could see none of Bill's record, and nothing stopped it. Claude Code's own
+// debug log gave the cause: "--mcp-config servers running fully async (nonblocking)", so the
+// opening prompt was processed before the server attached. The flag also suppressed the
+// plugin's own .mcp.json, which is the path that does deliver tools on the first turn.
+console.log('\n== the coach server reaches Claude Code ==');
+{
+  const launcher = fs.readFileSync(path.join(pkg, 'launcher', 'coach.mjs'), 'utf8');
+  check(!/'--strict-mcp-config'/.test(launcher),
+    'the launcher does not pass --strict-mcp-config',
+    'it suppresses the plugin server, leaving only the async --mcp-config path');
+  check(!/'--mcp-config'/.test(launcher),
+    'the launcher does not pass --mcp-config',
+    'servers supplied that way attach asynchronously and lose the race with the opening prompt');
+  check(fs.existsSync(path.join(pkg, 'plugin', '.mcp.json')),
+    'the plugin ships its own .mcp.json, which is how the server is registered');
+  check(/serverAnswers|initialize/.test(launcher),
+    'the launcher handshakes with the runtime before handing over',
+    'existence checks cannot tell a working runtime from a silent one');
+  check(/did not respond/.test(launcher),
+    'and refuses with a plain message rather than opening a session that cannot see his record');
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('');
 console.log(failures === 0 ? 'VOICE LAYER TESTS PASSED' : `VOICE LAYER TESTS FAILED: ${failures}`);

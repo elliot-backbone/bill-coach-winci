@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 
 const pkg = path.resolve(process.argv[2]);
 let failures = 0;
@@ -127,9 +128,24 @@ section('Skipping onboarding');
   check(afterSkip.data?.mode !== 'onboarding', `the next session is ordinary work (mode ${afterSkip.data?.mode})`);
   check(!/pane_/.test(JSON.stringify(afterSkip.data)), 'no pane is presented after a skip');
   const blob = JSON.stringify(afterSkip.data);
-  check(/principal_profile/.test(blob), 'the seeded principal model is in orientation after a skip', blob.slice(0, 250));
-  check(/"confirmed":0/.test(blob), 'and it is carried as UNCONFIRMED — a proposal, not a fact about him',
-    blob.slice(0, 250));
+  // A scrubbed package ships this table empty on purpose — it describes Bill. Ask the
+  // package what it seeds rather than assuming, so the assertion means the same thing
+  // for the real build and for the copy that goes to CI.
+  const seeded = (() => {
+    const db = new DatabaseSync(path.join(pkg, 'state-template', 'coach.sqlite'), { readOnly: true });
+    db.exec('PRAGMA busy_timeout = 10000');
+    const n = db.prepare('SELECT COUNT(*) AS n FROM principal_profile').get().n;
+    db.close();
+    return n > 0;
+  })();
+  if (seeded) {
+    check(/principal_profile/.test(blob), 'the seeded principal model is in orientation after a skip', blob.slice(0, 250));
+    check(/"confirmed":0/.test(blob), 'and it is carried as UNCONFIRMED — a proposal, not a fact about him',
+      blob.slice(0, 250));
+  } else {
+    note('this package ships no principal model (scrubbed build) — seeding assertions skipped');
+    check(!/principal_profile/.test(blob), 'an unseeded principal model is absent rather than empty-and-noisy');
+  }
 
   // Onboarding must never reopen once skipped.
   const reopen = await sk.call('save_coaching_state', {

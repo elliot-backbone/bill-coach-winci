@@ -81,6 +81,38 @@ check(typeof MIGRATIONS[2] === 'function', 'a migration to schema 2 is registere
   db.close();
 }
 
+// Upgrading from a version that ALREADY has every directory the new one has. Every other
+// upgrade test starts from an older package missing the new directories, so the swap renames
+// onto nothing and passes. MEASURED 2026-08-22: `authorities` was added to plugin/ and left
+// out of CODE_ENTRIES; 1.2.4 -> 1.4.0 passed, 1.4.0 -> 1.4.1 failed ENOTEMPTY on the swap.
+{
+  console.log('\n== upgrading onto an install that already has every directory ==');
+  const { CODE_ENTRIES } = await import(pathToFileURL(path.join(newPkg, 'install', 'install.mjs')).href);
+  const pluginDir = path.join(newPkg, 'plugin');
+  const shipped = fs.readdirSync(pluginDir).filter((n) => n !== '.DS_Store');
+  const missing = shipped.filter((n) => !CODE_ENTRIES.includes(n));
+  check(missing.length === 0,
+    'every top-level plugin directory is listed in CODE_ENTRIES',
+    `not listed, so the upgrade swap would fail ENOTEMPTY: ${missing.join(', ')}`);
+}
+
+// An OLDER install is legitimately missing whatever directories the new version added, and
+// that is an upgrade rather than damage. MEASURED 2026-08-22: after `authorities` was added to
+// CODE_ENTRIES, performInstall checked completeness BEFORE version and sent every 1.2.4
+// install into the repair path, where the schema guard correctly refused it. The upgrade that
+// carries the migrations could not run at all, and the installer reported a hard failure.
+{
+  console.log('\n== routing: stale install goes to upgrade, not repair ==');
+  const install = await import(pathToFileURL(path.join(newPkg, 'install', 'install.mjs')).href);
+  const src = fs.readFileSync(path.join(newPkg, 'install', 'install.mjs'), 'utf8');
+  const versionCheck = src.indexOf('versionCompare(marker.version, manifest.version) === 0');
+  const completeCheck = src.indexOf('missingInstallParts(P)', src.indexOf('performInstall'));
+  check(versionCheck !== -1 && completeCheck !== -1 && versionCheck < completeCheck,
+    'performInstall compares the version before it judges completeness',
+    'completeness first means a stale install is read as damage and never upgrades');
+  check(typeof install.missingInstallParts === 'function', 'missingInstallParts is still exported for the repair path');
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('');
 console.log(failures === 0 ? 'MIGRATION TESTS PASSED' : `MIGRATION TESTS FAILED: ${failures}`);

@@ -104,9 +104,24 @@ section('P0 -> P1 — needs Bill\'s own verdict');
     'bill-said: yes, go on that one');
   check(recorded.ok, 'Bill\'s verdict is recorded with bill-said provenance', JSON.stringify(recorded.data).slice(0, 250));
 
-  const moved = await move(ROLE, 'P1', 'bill-said: applying today');
-  check(moved.ok, 'the move is applied once the verdict exists', JSON.stringify(moved.data).slice(0, 250));
-  check(moved.data?.phase === 'P1', `phase is now P1 (got ${moved.data?.phase})`);
+  // The gate compares this value exactly, and it lives in a JSON column with no CHECK
+  // behind it. However Bill's yes is phrased, it has to reach the gate as one.
+  for (const spelling of ['Go', 'yes', ' go']) {
+    const probe = await P('roles:new', { company: `Verdict ${spelling}`, lane: 'core-ft', source: 'test' }, 'bill-said: look');
+    const pid = probe.data?.role_id;
+    await P(`roles:${pid}`, { bill_fit: { verdict: spelling } }, 'bill-said: yes');
+    const advanced = await move(pid, 'P1', 'bill-said: on it');
+    check(advanced.ok, `a verdict written as "${spelling}" still opens the P0 -> P1 gate`,
+      JSON.stringify(advanced.data).slice(0, 200));
+  }
+  const nonsense = await P(`roles:${ROLE}`, { bill_fit: { verdict: 'probably?' } }, 'bill-said: dunno');
+  check(/not a verdict/.test(JSON.stringify(nonsense.data)), 'a value that is not a verdict is refused with the allowed list',
+    JSON.stringify(nonsense.data).slice(0, 250));
+  const survived = await move(ROLE, 'P1', 'bill-said: on it');
+  check(survived.ok, 'a rejected verdict does not wipe the good one already recorded',
+    JSON.stringify(survived.data).slice(0, 250));
+
+  check(survived.data?.phase === 'P1', `phase is now P1 (got ${survived.data?.phase})`);
 }
 
 // ---------------------------------------------------------------- P1 -> P2

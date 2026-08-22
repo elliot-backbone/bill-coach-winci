@@ -24,7 +24,9 @@ fs.copyFileSync(path.join(oldPkg, 'state-template', 'coach.sqlite'), db1);
   db.close();
 }
 
-const { MIGRATIONS } = await import(`${newPkg}/install/upgrade.mjs`);
+// Absolute paths are not valid ESM specifiers on Windows; the URL form is.
+const { pathToFileURL } = await import('node:url');
+const { MIGRATIONS } = await import(pathToFileURL(path.join(newPkg, 'install', 'upgrade.mjs')).href);
 check(typeof MIGRATIONS[2] === 'function', 'a migration to schema 2 is registered');
 
 {

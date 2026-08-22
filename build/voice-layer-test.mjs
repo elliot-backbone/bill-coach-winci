@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
 const pkg = path.resolve(process.argv[2]);
 let failures = 0;
@@ -81,7 +82,8 @@ for (const rel of ['plugin/authorities/style-prohibition-register.v1.json',
                    'plugin/authorities/ai-writing-signs-register.v1.json']) {
   check(fs.existsSync(path.join(pkg, rel)), `${rel.split('/').pop()} ships`);
 }
-const m = await import(path.join(pkg, 'plugin', 'runtime', 'style.mjs'));
+// On Windows an absolute path is not a valid ESM specifier — it reads as a 'c:' protocol.
+const m = await import(pathToFileURL(path.join(pkg, 'plugin', 'runtime', 'style.mjs')).href);
 check(m.STYLE_RULE_COUNT >= 49, `both registers load (${m.STYLE_RULE_COUNT} rules) for measurement`);
 
 // ---------------------------------------------------------------- measurement, not a gate

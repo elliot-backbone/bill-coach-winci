@@ -1,0 +1,125 @@
+# An interactive Coach session on a real Windows machine.
+#
+# The automated smoke test proves the machinery. This proves the thing no test can: what it is
+# like to sit in front of Coach on Windows and use it. You get a shell on the runner, type
+# `coach`, sign in once, and talk to it.
+#
+# THE REAL PACKAGE NEVER ENTERS THIS REPO. This repo is public and holds only the scrubbed
+# build. The real one — Bill's record, the licensed deal baseline, field notes derived from
+# copyrighted works — is fetched at run time from a PRIVATE repo over SSH, using a read-only
+# deploy key held as a secret here. The runner is destroyed when the job ends and takes its
+# copy with it. Nothing is committed, nothing is uploaded, nothing survives.
+#
+# ACCESS IS LOCKED TO YOU. `limit-access-to-actor: true` means only the GitHub account that
+# started the run can connect, even though the connection details appear in a public log.
+
+name: windows-interactive
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Which package to install'
+        required: true
+        default: 'real'
+        type: choice
+        options: [real, scrubbed]
+      minutes:
+        description: 'How long to hold the session open'
+        required: true
+        default: '60'
+
+jobs:
+  session:
+    runs-on: windows-latest
+    timeout-minutes: 125
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install Claude Code
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Fetch the real package from the private repo
+        if: ${{ github.event.inputs.package == 'real' }}
+        shell: pwsh
+        env:
+          DEPLOY_KEY: ${{ secrets.PACKAGE_DEPLOY_KEY }}
+        run: |
+          # The key lands in the runner's temp directory and is locked to this user, because
+          # OpenSSH refuses a private key that anyone else on the box can read.
+          $keyPath = Join-Path $env:RUNNER_TEMP 'package_key'
+          $env:DEPLOY_KEY -replace "`r`n", "`n" | Set-Content -Path $keyPath -NoNewline -Encoding ascii
+          icacls $keyPath /inheritance:r | Out-Null
+          icacls $keyPath /grant:r "$($env:USERNAME):(R)" | Out-Null
+          $env:GIT_SSH_COMMAND = "ssh -i `"$keyPath`" -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+          git clone --depth 1 git@github.com:elliot-backbone/bill-coach-package.git "$env:RUNNER_TEMP\pkg"
+          Remove-Item $keyPath -Force
+          $zip = Get-ChildItem "$env:RUNNER_TEMP\pkg\*.zip" | Select-Object -First 1
+          Write-Host "fetched $($zip.Name), $([math]::Round($zip.Length/1MB,1)) MB"
+          Expand-Archive -Path $zip.FullName -DestinationPath "$env:RUNNER_TEMP\coach" -Force
+          "PKG=$env:RUNNER_TEMP\coach\package" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Use the scrubbed package instead
+        if: ${{ github.event.inputs.package == 'scrubbed' }}
+        shell: pwsh
+        run: |
+          Expand-Archive -Path test-package.zip -DestinationPath "$env:RUNNER_TEMP\coach" -Force
+          "PKG=$env:RUNNER_TEMP\coach\package" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Coach
+        shell: pwsh
+        run: |
+          Push-Location $env:PKG
+          $out = (& node install\install.mjs 2>$null | Out-String).Trim()
+          Pop-Location
+          Write-Host "installer said: $out"
+          if ($out -notmatch '^(installed|upgraded|repaired)') { throw "install failed: $out" }
+          # The PATH change is written to the user environment and does not reach this process.
+          $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+          "PATH=$userPath;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: How to use this session
+        shell: pwsh
+        run: |
+          Write-Host ""
+          Write-Host "================ COACH IS INSTALLED ================"
+          Write-Host ""
+          Write-Host "  Connect using the SSH command printed below, then:"
+          Write-Host ""
+          Write-Host "    coach"
+          Write-Host ""
+          Write-Host "  First launch asks for a one-time Claude sign-in. It prints a URL:"
+          Write-Host "  open it in your own browser, approve, paste the code back."
+          Write-Host ""
+          Write-Host "  Package installed: ${{ github.event.inputs.package }}"
+          Write-Host "  Profile:  `$env:USERPROFILE\.claude-bill-career-coach"
+          Write-Host "  Session ends when you type 'exit', or after ${{ github.event.inputs.minutes }} minutes."
+          Write-Host ""
+          Write-Host "  Everything here is destroyed with the runner. Nothing is saved,"
+          Write-Host "  nothing is uploaded, and no state carries to the next run."
+          Write-Host ""
+          Write-Host "===================================================="
+
+      - name: Open the session
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+
+      - name: Leave nothing behind
+        if: always()
+        shell: pwsh
+        run: |
+          # Belt and braces. The runner is discarded anyway, but an aborted job should not
+          # leave the real package sitting in a temp directory on a machine still running.
+          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\pkg" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:RUNNER_TEMP\coach" -ErrorAction SilentlyContinue
+          Remove-Item -Force "$env:RUNNER_TEMP\package_key" -ErrorAction SilentlyContinue
+          Write-Host "temp copies removed"

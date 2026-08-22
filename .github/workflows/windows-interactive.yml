@@ -55,11 +55,17 @@ jobs:
         run: |
           # The key lands in the runner's temp directory and is locked to this user, because
           # OpenSSH refuses a private key that anyone else on the box can read.
+          # It MUST end in a newline: without one OpenSSH rejects it as
+          # "error in libcrypto: unsupported", which reads like a key format problem and is not.
+          # The ACL grants FULL control rather than read, or the cleanup below cannot delete it.
           $keyPath = Join-Path $env:RUNNER_TEMP 'package_key'
-          $env:DEPLOY_KEY -replace "`r`n", "`n" | Set-Content -Path $keyPath -NoNewline -Encoding ascii
+          $key = ($env:DEPLOY_KEY -replace "`r`n", "`n").TrimEnd() + "`n"
+          [System.IO.File]::WriteAllText($keyPath, $key, (New-Object System.Text.UTF8Encoding $false))
           icacls $keyPath /inheritance:r | Out-Null
-          icacls $keyPath /grant:r "$($env:USERNAME):(R)" | Out-Null
+          icacls $keyPath /grant:r "$($env:USERNAME):(F)" | Out-Null
           $env:GIT_SSH_COMMAND = "ssh -i `"$keyPath`" -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes"
+          $probe = (& ssh -i "$keyPath" -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes -T git@github.com 2>&1 | Out-String)
+          Write-Host "key check: $($probe.Trim())"
           git clone --depth 1 git@github.com:elliot-backbone/bill-coach-package.git "$env:RUNNER_TEMP\pkg"
           Remove-Item $keyPath -Force
           $zip = Get-ChildItem "$env:RUNNER_TEMP\pkg\*.zip" | Select-Object -First 1

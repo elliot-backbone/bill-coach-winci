@@ -1,12 +1,16 @@
-# Why does the coach MCP server not attach on Windows?
+# Why do the coach tools not attach on Windows?
 #
-# MEASURED 2026-08-22 in a live interactive session: Coach launches, Claude Code starts, and
-# the coach tools are absent. It reports having only web search and fetch. The same flags work
-# on macOS, and the smoke test passes because it spawns server.mjs DIRECTLY rather than through
-# Claude Code, so the gap between "the server works" and "the client attached it" was never
-# covered by anything.
+# MEASURED 2026-08-22 in a live interactive session on this runner image: Coach launches,
+# Claude Code starts, and the coach tools are absent — it reports having only web search and
+# fetch. The same flags attach all eleven tools on macOS.
 #
-# This runs the same launcher path non-interactively and prints every layer of it.
+# The smoke test cannot see this. It spawns server.mjs DIRECTLY and drives the protocol
+# itself, which proves the server works and says nothing about whether the CLIENT attached it.
+# That gap is where this bug lives.
+#
+# `claude mcp list` health-checks each configured server and needs no login, so the attach
+# step is reproducible on a runner with no credentials. Control, measured on macOS:
+#   bill-coach: node /…/server.mjs - ✔ Connected
 
 name: windows-mcp-diagnose
 
@@ -28,67 +32,88 @@ jobs:
         shell: pwsh
         run: |
           npm install -g @anthropic-ai/claude-code
+          claude --version
           Expand-Archive -Path test-package.zip -DestinationPath "$env:RUNNER_TEMP\coach" -Force
           Push-Location "$env:RUNNER_TEMP\coach\package"
           $out = (& node install\install.mjs 2>$null | Out-String).Trim()
           Pop-Location
           Write-Host "installer: $out"
 
-      - name: Layer 1 — what the installer wrote
-        shell: pwsh
-        run: |
-          $d = "$env:USERPROFILE\.claude-bill-career-coach"
-          Write-Host "--- mcp/coach-mcp.json ---"
-          Get-Content "$d\mcp\coach-mcp.json"
-          Write-Host "--- does the server file exist? ---"
-          $srv = "$d\plugins\data\bill-career-coach-skills-dir\runtime\server.mjs"
-          Write-Host "$srv -> $(Test-Path $srv)"
-          Write-Host "--- how does 'node' resolve here? ---"
-          Write-Host (Get-Command node).Source
-          Write-Host "--- and from a bare shell spawn, the way a client would? ---"
-          cmd /c "where node"
-
-      - name: Layer 2 — the server, driven by hand
+      - name: The server, driven by hand (does it work at all on Windows)
         shell: pwsh
         run: |
           $d = "$env:USERPROFILE\.claude-bill-career-coach"
           $env:BILL_COACH_DATA_DIR = "$d\plugins\data\bill-career-coach-skills-dir"
           $req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"diag","version":"1"}}}'
-          $out = $req | node "$env:BILL_COACH_DATA_DIR\runtime\server.mjs" 2>&1 | Select-Object -First 3
-          Write-Host "server replied: $out"
+          $out = $req | node "$env:BILL_COACH_DATA_DIR\runtime\server.mjs" 2>&1 | Select-Object -First 1
+          Write-Host "HANDSHAKE: $out"
 
-      - name: Layer 3 — does Claude Code attach it
-        shell: pwsh
-        continue-on-error: true
-        env:
-          ANTHROPIC_API_KEY: ''
-        run: |
-          $d = "$env:USERPROFILE\.claude-bill-career-coach"
-          $env:CLAUDE_CONFIG_DIR = $d
-          Write-Host "--- claude mcp list, against the sealed config ---"
-          & claude mcp list --mcp-config "$d\mcp\coach-mcp.json" --strict-mcp-config 2>&1 | Select-Object -First 20
-          Write-Host ""
-          Write-Host "--- and with --debug, which prints why a server was dropped ---"
-          & claude --debug --setting-sources user --strict-mcp-config --mcp-config "$d\mcp\coach-mcp.json" --tools WebSearch,WebFetch -p "reply with OK" 2>&1 |
-            Select-String -Pattern "mcp|server|spawn|ENOENT|error|failed" -CaseSensitive:$false |
-            Select-Object -First 30
-
-      - name: Layer 4 — the same config with an explicit shell command
+      - name: Does Claude Code attach it — the shipped config, verbatim
         shell: pwsh
         continue-on-error: true
         run: |
-          # The hypothesis worth testing first: on Windows a bare `node` in an MCP command is
-          # spawned without a shell, so PATHEXT never applies and the process fails to start.
           $d = "$env:USERPROFILE\.claude-bill-career-coach"
-          $env:CLAUDE_CONFIG_DIR = $d
           $cfg = Get-Content "$d\mcp\coach-mcp.json" -Raw | ConvertFrom-Json
-          $srv = $cfg.mcpServers.'bill-coach'.args[0]
-          $nodeExe = (Get-Command node).Source
-          $alt = @{ mcpServers = @{ 'bill-coach' = @{
-              type = 'stdio'; command = $nodeExe; args = @($srv)
-              env = @{ BILL_COACH_DATA_DIR = $cfg.mcpServers.'bill-coach'.env.BILL_COACH_DATA_DIR } } } }
-          $altPath = "$env:RUNNER_TEMP\mcp-absolute-node.json"
-          $alt | ConvertTo-Json -Depth 6 | Set-Content $altPath -Encoding utf8
-          Write-Host "--- retrying with the absolute path to node.exe ---"
-          Get-Content $altPath
-          & claude mcp list --mcp-config $altPath --strict-mcp-config 2>&1 | Select-Object -First 20
+          $entry = $cfg.mcpServers.'bill-coach' | ConvertTo-Json -Depth 6 -Compress
+          Write-Host "ENTRY: $entry"
+          $probe = "$env:RUNNER_TEMP\probe-shipped"
+          $env:CLAUDE_CONFIG_DIR = $probe
+          & claude mcp add-json bill-coach $entry --scope user 2>&1 | Select-Object -Last 1
+          Write-Host "--- health check, shipped config ---"
+          & claude mcp list 2>&1 | Select-Object -Last 6
+
+      - name: Same, but with the absolute path to node.exe
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Hypothesis: a bare `node` command is spawned without a shell on Windows, so PATHEXT
+          # never applies and the process cannot start. The docs say executables on PATH work
+          # as-is, so if this one connects and the shipped one does not, the docs are wrong for
+          # native Windows and the installer must render an absolute interpreter path.
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $cfg = Get-Content "$d\mcp\coach-mcp.json" -Raw | ConvertFrom-Json
+          $entry = @{
+            type = 'stdio'
+            command = (Get-Command node).Source
+            args = @($cfg.mcpServers.'bill-coach'.args[0])
+            env = @{ BILL_COACH_DATA_DIR = $cfg.mcpServers.'bill-coach'.env.BILL_COACH_DATA_DIR }
+          } | ConvertTo-Json -Depth 6 -Compress
+          Write-Host "ENTRY: $entry"
+          $probe = "$env:RUNNER_TEMP\probe-abs"
+          $env:CLAUDE_CONFIG_DIR = $probe
+          & claude mcp add-json bill-coach $entry --scope user 2>&1 | Select-Object -Last 1
+          Write-Host "--- health check, absolute node.exe ---"
+          & claude mcp list 2>&1 | Select-Object -Last 6
+
+      - name: Same, but wrapped in cmd /c
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $cfg = Get-Content "$d\mcp\coach-mcp.json" -Raw | ConvertFrom-Json
+          $entry = @{
+            type = 'stdio'
+            command = 'cmd'
+            args = @('/c', 'node', $cfg.mcpServers.'bill-coach'.args[0])
+            env = @{ BILL_COACH_DATA_DIR = $cfg.mcpServers.'bill-coach'.env.BILL_COACH_DATA_DIR }
+          } | ConvertTo-Json -Depth 6 -Compress
+          Write-Host "ENTRY: $entry"
+          $probe = "$env:RUNNER_TEMP\probe-cmd"
+          $env:CLAUDE_CONFIG_DIR = $probe
+          & claude mcp add-json bill-coach $entry --scope user 2>&1 | Select-Object -Last 1
+          Write-Host "--- health check, cmd /c wrapper ---"
+          & claude mcp list 2>&1 | Select-Object -Last 6
+
+      - name: If anything failed, read the server stderr the docs point at
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($p in @('probe-shipped','probe-abs','probe-cmd')) {
+            $dbg = "$env:RUNNER_TEMP\$p\debug"
+            if (Test-Path $dbg) {
+              Write-Host "--- $p debug logs ---"
+              Get-ChildItem $dbg -Filter *.txt | ForEach-Object {
+                Get-Content $_.FullName -Tail 25
+              }
+            }
+          }

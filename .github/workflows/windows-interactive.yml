@@ -123,6 +123,23 @@ jobs:
           # log for it, which left the connection string visible only in the web UI.
           detached: true
 
+      # The connection string as a workflow ANNOTATION. Job logs do not publish until the whole
+      # job ends, so for three sessions running the only copy was four clicks deep in the web UI.
+      # Annotations are readable through the checks API while the job is still going.
+      - name: Publish the connection string
+        shell: bash
+        run: |
+          ssh_line=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null || true)
+          if [ -n "$ssh_line" ]; then
+            echo "::notice title=Connect with this::${ssh_line}"
+            echo "### Connect" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "${ssh_line}" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning title=No connection string::could not read the tmate socket; read it from the log above"
+          fi
+
       - name: Hold the runner open
         shell: pwsh
         run: |

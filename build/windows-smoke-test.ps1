@@ -236,6 +236,40 @@ try {
     Write-Host '  (session-controls-test.mjs not found; skipping)' -ForegroundColor Yellow
   }
 
+  # ---------------------------------------------------------------- pipeline
+  # The funnel walked end to end: a company enters at P0 and reaches P5, every phase
+  # guard refused without its evidence and applied once the evidence exists.
+  Section 'Pipeline management'
+  $pipeScript = Join-Path $PSScriptRoot 'pipeline-test.mjs'
+  if (Test-Path $pipeScript) {
+    $pipeOut = (& node $pipeScript $pkg 2>&1 | Out-String)
+    Write-Host $pipeOut
+    Check ($pipeOut -match 'PIPELINE TESTS PASSED') 'pipeline tests passed' `
+      (($pipeOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else { Write-Host '  (pipeline-test.mjs not found; skipping)' -ForegroundColor Yellow }
+
+  # ---------------------------------------------------------------- second layer
+  Section 'Runtime probes'
+  $rtScript = Join-Path $PSScriptRoot 'runtime-probes.mjs'
+  if (Test-Path $rtScript) {
+    $rtOut = (& node $rtScript $pkg 2>&1 | Out-String)
+    Write-Host $rtOut
+    Check ($rtOut -match 'RUNTIME PROBES PASSED') 'runtime probes passed' `
+      (($rtOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else { Write-Host '  (runtime-probes.mjs not found; skipping)' -ForegroundColor Yellow }
+
+  # ---------------------------------------------------------------- conformance
+  # Does the doctrine describe a machine that exists? Every tool, table and payload
+  # the instruction surfaces name, checked against the live schemas.
+  Section 'Doctrine conformance'
+  $confScript = Join-Path $PSScriptRoot 'doctrine-conformance-test.mjs'
+  if (Test-Path $confScript) {
+    $confOut = (& node $confScript $pkg 2>&1 | Out-String)
+    Write-Host $confOut
+    Check ($confOut -match 'DOCTRINE CONFORMANCE PASSED') 'doctrine conformance passed' `
+      (($confOut -split "`n" | Where-Object { $_ -match 'FAIL' }) -join '; ')
+  } else { Write-Host '  (doctrine-conformance-test.mjs not found; skipping)' -ForegroundColor Yellow }
+
   # ---------------------------------------------------------------- idempotent
   Section 'Re-run (idempotency)'
   Push-Location $pkg

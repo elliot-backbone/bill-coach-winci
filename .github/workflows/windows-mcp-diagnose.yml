@@ -1,0 +1,94 @@
+# Why does the coach MCP server not attach on Windows?
+#
+# MEASURED 2026-08-22 in a live interactive session: Coach launches, Claude Code starts, and
+# the coach tools are absent. It reports having only web search and fetch. The same flags work
+# on macOS, and the smoke test passes because it spawns server.mjs DIRECTLY rather than through
+# Claude Code, so the gap between "the server works" and "the client attached it" was never
+# covered by anything.
+#
+# This runs the same launcher path non-interactively and prints every layer of it.
+
+name: windows-mcp-diagnose
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Install Claude Code and Coach
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          Expand-Archive -Path test-package.zip -DestinationPath "$env:RUNNER_TEMP\coach" -Force
+          Push-Location "$env:RUNNER_TEMP\coach\package"
+          $out = (& node install\install.mjs 2>$null | Out-String).Trim()
+          Pop-Location
+          Write-Host "installer: $out"
+
+      - name: Layer 1 — what the installer wrote
+        shell: pwsh
+        run: |
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          Write-Host "--- mcp/coach-mcp.json ---"
+          Get-Content "$d\mcp\coach-mcp.json"
+          Write-Host "--- does the server file exist? ---"
+          $srv = "$d\plugins\data\bill-career-coach-skills-dir\runtime\server.mjs"
+          Write-Host "$srv -> $(Test-Path $srv)"
+          Write-Host "--- how does 'node' resolve here? ---"
+          Write-Host (Get-Command node).Source
+          Write-Host "--- and from a bare shell spawn, the way a client would? ---"
+          cmd /c "where node"
+
+      - name: Layer 2 — the server, driven by hand
+        shell: pwsh
+        run: |
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:BILL_COACH_DATA_DIR = "$d\plugins\data\bill-career-coach-skills-dir"
+          $req = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"diag","version":"1"}}}'
+          $out = $req | node "$env:BILL_COACH_DATA_DIR\runtime\server.mjs" 2>&1 | Select-Object -First 3
+          Write-Host "server replied: $out"
+
+      - name: Layer 3 — does Claude Code attach it
+        shell: pwsh
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: ''
+        run: |
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:CLAUDE_CONFIG_DIR = $d
+          Write-Host "--- claude mcp list, against the sealed config ---"
+          & claude mcp list --mcp-config "$d\mcp\coach-mcp.json" --strict-mcp-config 2>&1 | Select-Object -First 20
+          Write-Host ""
+          Write-Host "--- and with --debug, which prints why a server was dropped ---"
+          & claude --debug --setting-sources user --strict-mcp-config --mcp-config "$d\mcp\coach-mcp.json" --tools WebSearch,WebFetch -p "reply with OK" 2>&1 |
+            Select-String -Pattern "mcp|server|spawn|ENOENT|error|failed" -CaseSensitive:$false |
+            Select-Object -First 30
+
+      - name: Layer 4 — the same config with an explicit shell command
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # The hypothesis worth testing first: on Windows a bare `node` in an MCP command is
+          # spawned without a shell, so PATHEXT never applies and the process fails to start.
+          $d = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:CLAUDE_CONFIG_DIR = $d
+          $cfg = Get-Content "$d\mcp\coach-mcp.json" -Raw | ConvertFrom-Json
+          $srv = $cfg.mcpServers.'bill-coach'.args[0]
+          $nodeExe = (Get-Command node).Source
+          $alt = @{ mcpServers = @{ 'bill-coach' = @{
+              type = 'stdio'; command = $nodeExe; args = @($srv)
+              env = @{ BILL_COACH_DATA_DIR = $cfg.mcpServers.'bill-coach'.env.BILL_COACH_DATA_DIR } } } }
+          $altPath = "$env:RUNNER_TEMP\mcp-absolute-node.json"
+          $alt | ConvertTo-Json -Depth 6 | Set-Content $altPath -Encoding utf8
+          Write-Host "--- retrying with the absolute path to node.exe ---"
+          Get-Content $altPath
+          & claude mcp list --mcp-config $altPath --strict-mcp-config 2>&1 | Select-Object -First 20

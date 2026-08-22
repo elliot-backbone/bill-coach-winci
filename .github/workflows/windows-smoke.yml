@@ -1,0 +1,59 @@
+# Real-Windows execution test for the Coach installer and runtime.
+#
+# This is the gate that macOS cannot provide: cmd.exe actually running the shim,
+# PATHEXT resolution finding claude.cmd, the USER PATH written to the registry and
+# read back by a fresh process, junctions created without elevation, and SQLite
+# file locking on Windows across a server restart.
+#
+# The package in this repo is SCRUBBED (build/make-test-package.mjs in the private
+# build tree): every byte of code is the real code, but the library, the state
+# template and all coach content are emptied. No personal briefing, no memory
+# atoms, no licensed dataset. Never commit the real package here.
+
+name: windows-smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      zip:
+        description: 'Path to the package zip in the repo'
+        required: true
+        default: 'test-package.zip'
+
+jobs:
+  smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 24.0.0 is the floor the installer enforces (node:sqlite with FTS5).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+
+      - name: Show environment
+        shell: pwsh
+        run: |
+          node --version
+          $PSVersionTable.PSVersion
+          [Environment]::OSVersion.VersionString
+          "PATHEXT = $env:PATHEXT"
+
+      # Gives the runner a real claude.cmd, which is what exercises the installer's
+      # PATHEXT resolution and the launcher's shell:true spawn.
+      - name: Install Claude Code
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Windows smoke test
+        shell: pwsh
+        run: |
+          $zip = '${{ github.event.inputs.zip }}'
+          if (-not $zip) { $zip = 'test-package.zip' }
+          ./build/windows-smoke-test.ps1 -ZipPath $zip

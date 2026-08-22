@@ -140,7 +140,7 @@ section('Skipping onboarding');
   })();
   if (seeded) {
     check(/principal_profile/.test(blob), 'the seeded principal model is in orientation after a skip', blob.slice(0, 250));
-    check(/"confirmed":0/.test(blob), 'and it is carried as UNCONFIRMED — a proposal, not a fact about him',
+    check(!/"confirmed"/.test(blob), 'and it carries no confidence tier — data is data',
       blob.slice(0, 250));
   } else {
     note('this package ships no principal model (scrubbed build) — seeding assertions skipped');

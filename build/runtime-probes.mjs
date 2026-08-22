@@ -223,11 +223,17 @@ await probe('Sensitive material', async () => {
     session: { status: 'active', evidence_ids: [], open_questions: [] },
   });
   bump(unconfirmed);
-  check((unconfirmed.data?.conflicts ?? []).some((c) => c.type === 'sensitive_requires_confirmation'),
-    'sensitive material cannot be stored unconfirmed', JSON.stringify(unconfirmed.data).slice(0, 250));
-  const leaked = await call('inspect_memory', { query: 'SENSITIVEPROBE', limit: 5, status: 'all' });
-  check(!JSON.stringify(leaked.data).includes('SENSITIVEPROBE'), 'the refused sensitive row was not stored anyway',
-    JSON.stringify(leaked.data).slice(0, 200));
+  // `confirmed` was removed in 1.3.1: data is data, and nothing gates on a tier.
+  // An old caller that still sends the field must keep working, not have its write
+  // rejected over a field that no longer exists.
+  check(unconfirmed.ok && !(unconfirmed.data?.conflicts ?? []).length,
+    'a write from a caller still sending the removed confirmed field is accepted',
+    JSON.stringify(unconfirmed.data).slice(0, 250));
+  const stored = await call('inspect_memory', { query: 'SENSITIVEPROBE', limit: 5, status: 'all' });
+  check(JSON.stringify(stored.data).includes('SENSITIVEPROBE'), 'and the row is actually stored',
+    JSON.stringify(stored.data).slice(0, 200));
+  check(!/"confirmed"/.test(JSON.stringify(stored.data)), 'no confidence tier is handed back to the model',
+    JSON.stringify(stored.data).slice(0, 200));
 
   const confirmed = await call('save_coaching_state', {
     session_id: sess.session_id, expected_session_version: ver,

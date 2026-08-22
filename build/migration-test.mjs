@@ -38,7 +38,6 @@ check(typeof MIGRATIONS[2] === 'function', 'a migration to schema 2 is registere
   check(has('people') === 0, 'people is gone');
   const row = db.prepare(`SELECT id,name,confirmed,working_model FROM principal_profile`).all();
   check(row.length === 1 && row[0].id === 'principal-bill', 'the existing row carried across', JSON.stringify(row));
-  check(row[0].confirmed === 1, 'a row Bill had already confirmed stays confirmed', JSON.stringify(row));
   check(row[0].working_model === 'terse', 'its content is untouched', JSON.stringify(row));
   const mem = db.prepare(`SELECT COUNT(*) n FROM memories WHERE id='pre-migration-memory'`).get().n;
   check(mem === 1, 'unrelated memory survived');
@@ -48,7 +47,26 @@ check(typeof MIGRATIONS[2] === 'function', 'a migration to schema 2 is registere
   db.close();
 }
 
-// And on an EMPTY people table it seeds the model unconfirmed.
+// Migration 3: the confidence tier is deleted, and the rows survive it.
+{
+  const db = new DatabaseSync(db1);
+  db.exec('PRAGMA busy_timeout = 10000');
+  const before = db.prepare('SELECT COUNT(*) AS n FROM memories').get().n;
+  check(db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('memories') WHERE name='confirmed'`).get().n === 1,
+    'the pre-1.3.1 database still has a confirmed column');
+  db.exec('BEGIN'); MIGRATIONS[3](db); db.exec('COMMIT');
+  check(db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('memories') WHERE name='confirmed'`).get().n === 0,
+    'confirmed is gone from memories');
+  check(db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('principal_profile') WHERE name='confirmed'`).get().n === 0,
+    'confirmed is gone from principal_profile');
+  check(db.prepare('SELECT COUNT(*) AS n FROM memories').get().n === before, 'no memory was lost dropping the column');
+  check(db.prepare('SELECT COUNT(*) AS n FROM principal_profile').get().n === 1, 'the principal row survived');
+  db.exec('BEGIN'); MIGRATIONS[3](db); db.exec('COMMIT');
+  check(true, 'running migration 3 twice changes nothing');
+  db.close();
+}
+
+// And on an EMPTY people table it seeds the model.
 {
   const db2 = path.join(dir, 'empty.sqlite');
   fs.copyFileSync(path.join(oldPkg, 'state-template', 'coach.sqlite'), db2);
@@ -57,7 +75,7 @@ check(typeof MIGRATIONS[2] === 'function', 'a migration to schema 2 is registere
   db.exec('BEGIN'); MIGRATIONS[2](db); db.exec('COMMIT');
   const rows = db.prepare(`SELECT id,name,confirmed FROM principal_profile`).all();
   check(rows.length === 1, 'an empty table is seeded with the principal model', JSON.stringify(rows));
-  check(rows[0].confirmed === 0, 'the seed is UNCONFIRMED — a proposal Bill rules on', JSON.stringify(rows));
+  check(rows[0].name === 'Bill Jennings', 'the seed is the principal model', JSON.stringify(rows));
   db.close();
 }
 

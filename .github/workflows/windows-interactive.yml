@@ -193,6 +193,7 @@ jobs:
           Write-Host "===================================================="
 
       - name: Open the session
+        id: tmate
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: true
@@ -201,10 +202,12 @@ jobs:
 
       - name: Publish the connection string
         shell: bash
+        env:
+          TMATE_SSH_COMMAND: ${{ steps.tmate.outputs.ssh-command }}
         run: |
-          ssh_line=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null || true)
+          ssh_line="${TMATE_SSH_COMMAND:-}"
           if [[ -z "$ssh_line" || "$ssh_line" != ssh\ * || "$ssh_line" == *$'\n'* || "$ssh_line" == *$'\r'* ]]; then
-            echo "::error title=No valid connection string::could not read one SSH command from the tmate socket"
+            echo "::error title=No valid connection string::action-tmate did not return one SSH command"
             exit 1
           fi
           printf '%s\n' "$ssh_line" > tmate-ssh.txt

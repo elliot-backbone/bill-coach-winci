@@ -1,6 +1,15 @@
 # bill-coach-winci
 
-Windows execution gate for the Coach installer and runtime. Private on purpose.
+Windows execution gate for the Coach installer and runtime.
+
+**THIS REPOSITORY IS PUBLIC.** It carries ONLY the scrubbed test package. The real package —
+Bill's record, the licensed deal baseline, field notes derived from copyrighted works — must
+NEVER be committed here, not even briefly: deleted blobs stay reachable by SHA and public push
+events are archived by third parties within seconds. CI fetches the real package at run time
+from the private repo over SSH.
+
+(This line previously read "Private on purpose", which was false and wrong in the direction
+that publishes data. Corrected 2026-08-23 after an audit measured the repo as PUBLIC.)
 
 ## Why this exists
 

@@ -187,8 +187,8 @@ jobs:
           Write-Host "  Profile:  `$env:USERPROFILE\.claude-bill-career-coach"
           Write-Host "  Session ends when you type 'exit', or after ${{ github.event.inputs.minutes }} minutes."
           Write-Host ""
-          Write-Host "  Everything here is destroyed with the runner. Nothing is saved,"
-          Write-Host "  nothing is uploaded, and no state carries to the next run."
+          Write-Host "  The package, profile and state are destroyed with the runner."
+          Write-Host "  Only the actor-restricted tmate SSH line is retained for one day."
           Write-Host ""
           Write-Host "===================================================="
 
@@ -196,27 +196,31 @@ jobs:
         uses: mxschmitt/action-tmate@v3
         with:
           limit-access-to-actor: true
-          # Detached, so this step COMPLETES and its log becomes readable through the API.
-          # Attached, the step stays in progress for the whole session and GitHub serves no
-          # log for it, which left the connection string visible only in the web UI.
+          # Detached lets the workflow validate and publish one SSH command before the hold.
           detached: true
 
-      # The connection string as a workflow ANNOTATION. Job logs do not publish until the whole
-      # job ends, so for three sessions running the only copy was four clicks deep in the web UI.
-      # Annotations are readable through the checks API while the job is still going.
       - name: Publish the connection string
         shell: bash
         run: |
           ssh_line=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}' 2>/dev/null || true)
-          if [ -n "$ssh_line" ]; then
-            echo "::notice title=Connect with this::${ssh_line}"
-            echo "### Connect" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "${ssh_line}" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning title=No connection string::could not read the tmate socket; read it from the log above"
+          if [[ -z "$ssh_line" || "$ssh_line" != ssh\ * || "$ssh_line" == *$'\n'* || "$ssh_line" == *$'\r'* ]]; then
+            echo "::error title=No valid connection string::could not read one SSH command from the tmate socket"
+            exit 1
           fi
+          printf '%s\n' "$ssh_line" > tmate-ssh.txt
+          echo "::notice title=Connect with this::${ssh_line}"
+          echo "### Connect" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${ssh_line}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Make the connection retrievable while the runner is open
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tmate-ssh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tmate-ssh.txt
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Hold the runner open
         shell: pwsh
@@ -241,4 +245,5 @@ jobs:
           Remove-Item -Recurse -Force "$env:RUNNER_TEMP\pkg" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "$env:RUNNER_TEMP\coach" -ErrorAction SilentlyContinue
           Remove-Item -Force "$env:RUNNER_TEMP\package_key" -ErrorAction SilentlyContinue
+          Remove-Item -Force "$env:GITHUB_WORKSPACE\tmate-ssh.txt" -ErrorAction SilentlyContinue
           Write-Host "temp copies removed"

@@ -90,3 +90,21 @@ jobs:
           if ($out -notmatch 'bill-coach') { throw "the client does not see the coach server at all" }
           if ($out -notmatch 'bill-coach.*(Connected|\u2714)') { throw "the coach server is registered but did not connect" }
           Write-Host "attached and connected"
+
+      # The gates, run on Windows against a real install. Copying these files into the repo
+      # without calling them would be a control nothing calls, which is the exact defect they
+      # were written to catch. The attach step above leaves an install in place; these use it.
+      - name: The runtime gates
+        shell: pwsh
+        run: |
+          $home_ = $env:USERPROFILE
+          $data = "$home_\.claude-bill-career-coach\plugins\data\bill-career-coach-skills-dir"
+          $pkg = "$env:RUNNER_TEMP\attach\package"
+          node build\deliverable-store-test.mjs $home_ $pkg
+          if ($LASTEXITCODE -ne 0) { throw "deliverable store failed on Windows" }
+          node build\persistence-guard-test.mjs $pkg $data
+          if ($LASTEXITCODE -ne 0) { throw "persistence guard failed on Windows" }
+          node build\narrative-gate-test.mjs $pkg $home_
+          if ($LASTEXITCODE -ne 0) { throw "narrative gate failed on Windows" }
+          Write-Host "all three gates hold on Windows"
+

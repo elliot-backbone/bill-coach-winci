@@ -28,6 +28,10 @@ on:
         description: 'How long to hold the session open'
         required: true
         default: '60'
+      expected_version:
+        description: 'Exact real package version expected from the private repo'
+        required: true
+        default: '1.13.1'
 
 jobs:
   session:
@@ -44,7 +48,7 @@ jobs:
       - name: Install Claude Code
         shell: pwsh
         run: |
-          npm install -g @anthropic-ai/claude-code
+          npm install -g @anthropic-ai/claude-code@2.1.238
           claude --version
 
       - name: Fetch the real package from the private repo
@@ -52,6 +56,7 @@ jobs:
         shell: pwsh
         env:
           DEPLOY_KEY: ${{ secrets.PACKAGE_DEPLOY_KEY }}
+          EXPECTED_VERSION: ${{ github.event.inputs.expected_version }}
         run: |
           # The key lands in the runner's temp directory and is locked to this user, because
           # OpenSSH refuses a private key that anyone else on the box can read.
@@ -68,10 +73,56 @@ jobs:
           Write-Host "key check: $($probe.Trim())"
           git clone --depth 1 git@github.com:elliot-backbone/bill-coach-package.git "$env:RUNNER_TEMP\pkg"
           Remove-Item $keyPath -Force
-          $zip = Get-ChildItem "$env:RUNNER_TEMP\pkg\*.zip" | Select-Object -First 1
+          $zips = @(Get-ChildItem "$env:RUNNER_TEMP\pkg\Bill-Jennings-Coach--*.zip" -File)
+          if ($zips.Count -ne 1) {
+            throw "expected exactly one Bill-Jennings-Coach package zip, found $($zips.Count)"
+          }
+          $zip = $zips[0]
+
+          # The checksum is a sibling of the unique release zip and must use the
+          # portable shasum form: lowercase hash, two spaces, basename, newline.
+          # Rejecting paths here prevents an old checksum from silently naming a
+          # different archive elsewhere on the build machine.
+          $checksumPath = "$($zip.FullName).sha256"
+          if (-not (Test-Path -LiteralPath $checksumPath -PathType Leaf)) {
+            throw "the release zip has no sibling .sha256 file"
+          }
+          $checksumText = [System.IO.File]::ReadAllText($checksumPath)
+          $checksumMatch = [regex]::Match($checksumText, '\A([0-9a-f]{64})  ([^/\\:\r\n]+)\r?\n\z')
+          if (-not $checksumMatch.Success) {
+            throw "the release checksum is not lowercase basename-only shasum format"
+          }
+          if ($checksumMatch.Groups[2].Value -cne $zip.Name) {
+            throw "the release checksum names a different archive"
+          }
+          $actualHash = (Get-FileHash -LiteralPath $zip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -cne $checksumMatch.Groups[1].Value) {
+            throw "the release archive does not match its checksum"
+          }
+
+          if ($env:EXPECTED_VERSION -notmatch '^\d+\.\d+\.\d+$') {
+            throw "expected_version must be x.y.z"
+          }
+          $expectedZipName = "Bill-Jennings-Coach--$($env:EXPECTED_VERSION).zip"
+          if ($zip.Name -cne $expectedZipName) {
+            throw "the unique release archive is not the requested version"
+          }
+
           Write-Host "fetched $($zip.Name), $([math]::Round($zip.Length/1MB,1)) MB"
           Expand-Archive -Path $zip.FullName -DestinationPath "$env:RUNNER_TEMP\coach" -Force
-          "PKG=$env:RUNNER_TEMP\coach\package" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $packagePath = "$env:RUNNER_TEMP\coach\package"
+          node build\manifest-integrity-test.mjs $packagePath
+          if ($LASTEXITCODE -ne 0) { throw "the real package manifest is stale or incomplete" }
+
+          $manifest = Get-Content -LiteralPath "$packagePath\manifest.json" -Raw | ConvertFrom-Json
+          if ($manifest.version -cne $env:EXPECTED_VERSION) {
+            throw "the manifest version is not the requested version"
+          }
+          if ($zip.Name -cne "Bill-Jennings-Coach--$($manifest.version).zip") {
+            throw "the manifest version and archive basename disagree"
+          }
+          Write-Host "PASS private archive, checksum, version and manifest"
+          "PKG=$packagePath" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Use the scrubbed package instead
         if: ${{ github.event.inputs.package == 'scrubbed' }}
@@ -91,6 +142,33 @@ jobs:
           # The PATH change is written to the user environment and does not reach this process.
           $userPath = [Environment]::GetEnvironmentVariable('Path','User')
           "PATH=$userPath;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Prove the exact private prepopulation reached the install
+        if: ${{ github.event.inputs.package == 'real' }}
+        shell: pwsh
+        run: |
+          $data = "$env:USERPROFILE\.claude-bill-career-coach\plugins\data\bill-career-coach-skills-dir"
+          node build\installed-prepopulation-test.mjs $env:PKG $data
+          if ($LASTEXITCODE -ne 0) { throw "installed private prepopulation did not verify" }
+
+      - name: Verify the install and Claude MCP attachment
+        shell: pwsh
+        run: |
+          $verifyOut = (& node "$env:PKG\install\verify-install.mjs" 2>&1 | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $verifyOut -notmatch '^ok') {
+            throw "verify-install did not report ok"
+          }
+          Write-Host "PASS verify-install"
+
+          $profileDir = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:CLAUDE_CONFIG_DIR = $profileDir
+          $mcpOut = (& claude mcp list 2>&1 | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code could not inspect the coach MCP registration" }
+          if ($mcpOut -notmatch 'bill-coach') { throw "Claude Code does not see the coach server" }
+          if ($mcpOut -notmatch 'bill-coach.*(Connected|\u2714)') {
+            throw "Claude Code sees the coach server but it is not connected"
+          }
+          Write-Host "PASS Claude Code sees bill-coach connected"
 
       - name: How to use this session
         shell: pwsh

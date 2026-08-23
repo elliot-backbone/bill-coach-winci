@@ -37,11 +37,17 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'narr-'));
 const DRAFT = 'I grew up around it. I was eleven when I first went. I remember the noise of it. '
   + 'I did that for ten years. I learned what it costs. I would not change it. '.repeat(12);
 
+// Tool results come back as `user` entries. A fixture that omits them is not the shape the
+// client writes, and it is what let a blind reader pass every one of these assertions.
 function transcript(ask, reply, tools = []) {
-  const content = [...tools.map((n) => ({ type: 'tool_use', name: n, input: {} })), { type: 'text', text: reply }];
+  const lines = [JSON.stringify({ type: 'user', message: { content: ask } })];
+  for (const n of tools) {
+    lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: n, input: {} }] } }));
+    lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } }));
+  }
+  lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } }));
   const f = path.join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`);
-  fs.writeFileSync(f, [JSON.stringify({ type: 'user', message: { content: ask } }),
-    JSON.stringify({ type: 'assistant', message: { content } })].join('\n'));
+  fs.writeFileSync(f, lines.join('\n'));
   return f;
 }
 function stop(file) {

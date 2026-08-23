@@ -15,13 +15,16 @@ let fails = 0;
 const ok = (c, l) => { console.log(`  ${c ? 'ok  ' : 'FAIL'} ${l}`); if (!c) fails += 1; };
 
 const LONG = 'x '.repeat(900);
+// Shaped like the transcripts Claude Code actually writes: every tool call is followed by a
+// `user` entry carrying its tool_result. A fixture without those passed while the reader was
+// blind to any turn containing a tool, which is every real turn.
 function transcript({ ask, reply, tools }) {
   const lines = [JSON.stringify({ type: 'user', message: { content: ask } })];
-  const content = [
-    ...tools.map((t) => ({ type: 'tool_use', name: t.name, input: t.input ?? {} })),
-    { type: 'text', text: reply },
-  ];
-  lines.push(JSON.stringify({ type: 'assistant', message: { content } }));
+  for (const t of tools) {
+    lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: t.name, input: t.input ?? {} }] } }));
+    lines.push(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } }));
+  }
+  lines.push(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: reply }] } }));
   const f = path.join(dir, `t-${Math.random().toString(36).slice(2)}.jsonl`);
   fs.writeFileSync(f, lines.join('\n'));
   return f;

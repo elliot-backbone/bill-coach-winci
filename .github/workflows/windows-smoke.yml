@@ -106,5 +106,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "persistence guard failed on Windows" }
           node build\narrative-gate-test.mjs $pkg $home_
           if ($LASTEXITCODE -ne 0) { throw "narrative gate failed on Windows" }
-          Write-Host "all three gates hold on Windows"
+          node build\cv-module-test.mjs $pkg $home_
+          if ($LASTEXITCODE -ne 0) { throw "cv module failed on Windows" }
+          node build\debrief-module-test.mjs $pkg $home_
+          if ($LASTEXITCODE -ne 0) { throw "debrief module failed on Windows" }
+          node build\company-family-test.mjs $pkg $home_
+          if ($LASTEXITCODE -ne 0) { throw "company family failed on Windows" }
+          node build\downstream-modules-test.mjs $pkg $home_
+          if ($LASTEXITCODE -ne 0) { throw "downstream modules failed on Windows" }
+          Write-Host "all seven gates hold on Windows"
 

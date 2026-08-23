@@ -51,8 +51,19 @@ const save = (payload) => saveCoachingState(db, {
 // part that was always useful: a fact says where it came from and when it was true, so Bill
 // can check it, and he can correct any of it at any time.
 console.log('facts');
-const roleId = db.prepare("SELECT id FROM roles WHERE phase='P0' LIMIT 1").get()?.id;
-ok(!!roleId, 'a P0 role exists to test against');
+// The scrubbed package ships an EMPTY roles table, so this creates what it needs rather than
+// assuming Bill's roster is present. Asserting "a role exists" tested the fixture, not the code.
+function makeRole(id, company) {
+  const now = new Date().toISOString();
+  db.prepare(`INSERT OR IGNORE INTO roles (id, company, lane, phase, source, as_of, thesis_fit_json,
+              bill_fit_json, their_side_json, investor_names_json, created_at, updated_at)
+              VALUES (?, ?, 'core-ft', 'P0', 'test fixture', ?, '{}', '{}', '{}', '[]', ?, ?)`)
+    .run(id, company, now.slice(0, 10), now, now);
+  return id;
+}
+const roleId = db.prepare("SELECT id FROM roles WHERE phase='P0' LIMIT 1").get()?.id
+  ?? makeRole('role-fam-a', 'Northwind Robotics');
+ok(!!roleId, 'a P0 role is available to test against');
 
 save({ facts: [{ role_id: roleId, kind: 'funding', claim: 'raised $4m seed', as_of: '2026-01', source: 'their website' }] });
 let f = db.prepare("SELECT * FROM facts WHERE role_id = ? AND kind='funding'").get(roleId);
@@ -70,7 +81,8 @@ ok((noDate.conflicts || []).some((c) => c.table === 'facts'),
 
 // ---- 2. promotion turns on Bill's verdict, nothing else -------------------
 console.log('\npromotion');
-const bare = db.prepare("SELECT id, company FROM roles WHERE phase='P0' AND id != ? LIMIT 1").get(roleId);
+const bare = db.prepare("SELECT id, company FROM roles WHERE phase='P0' AND id != ? LIMIT 1").get(roleId)
+  ?? { id: makeRole('role-fam-b', 'Deadend Systems'), company: 'Deadend Systems' };
 if (bare) {
   db.prepare(`UPDATE roles SET bill_fit_json = json('{"verdict":"go"}') WHERE id = ?`).run(bare.id);
   let threw = '';

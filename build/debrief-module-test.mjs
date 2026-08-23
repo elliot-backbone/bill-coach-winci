@@ -39,7 +39,18 @@ if (!sid) {
               VALUES ('sess-db',?,?,'active','[]','[]',1)`).run(now, now);
   sid = 'sess-db';
 }
-const roleId = db.prepare('SELECT id FROM roles LIMIT 1').get()?.id ?? 'role-test';
+// The scrubbed package ships with an EMPTY roles table, so inventing an id here produced a
+// foreign key failure on Windows while passing locally against the real roster. Create the role
+// when there is not one, the way a real session would.
+let roleId = db.prepare('SELECT id FROM roles LIMIT 1').get()?.id;
+if (!roleId) {
+  const now = new Date().toISOString();
+  roleId = 'role-test-debrief';
+  db.prepare(`INSERT INTO roles (id, company, lane, phase, source, as_of, thesis_fit_json, bill_fit_json,
+              their_side_json, investor_names_json, created_at, updated_at)
+              VALUES (?, 'Northwind Robotics', 'core-ft', 'P0', 'test fixture', ?, '{}', '{}', '{}', '[]', ?, ?)`)
+    .run(roleId, now.slice(0, 10), now, now);
+}
 const save = (payload) => saveCoachingState(db, {
   session_id: sid,
   expected_session_version: db.prepare('SELECT version FROM sessions WHERE id=?').get(sid).version,

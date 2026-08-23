@@ -100,6 +100,12 @@ jobs:
           $home_ = $env:USERPROFILE
           $data = "$home_\.claude-bill-career-coach\plugins\data\bill-career-coach-skills-dir"
           $pkg = "$env:RUNNER_TEMP\attach\package"
+          # Mark onboarding complete first, as the local runs do. Without it the onboarding pane
+          # guard fires on every turn and these suites measure THAT rather than the gate each one
+          # is written to test: four assertions inverted on Windows for exactly this reason,
+          # blocks landing where the test expected a pass and vice versa.
+          node build\complete-onboarding.mjs $data $pkg
+          if ($LASTEXITCODE -ne 0) { throw "could not complete onboarding on the test profile" }
           node build\deliverable-store-test.mjs $home_ $pkg
           if ($LASTEXITCODE -ne 0) { throw "deliverable store failed on Windows" }
           node build\persistence-guard-test.mjs $pkg $data

@@ -54,15 +54,22 @@ for (const db of ['state-template/coach.sqlite', 'library/library.sqlite']) {
   }
 }
 
-// 3. The tables that would carry his record must be empty.
+// 3. The tables that would carry his record must be empty — except the declared
+// synthetic verifier fixtures. Since 1.13.2 the shipped verify-install requires
+// rows in several tables, so make-test-package seeds exactly one obviously
+// synthetic row each ('*-test' ids). Any OTHER row is a scrub failure: the check
+// still catches a single real record.
+const SYNTHETIC_IDS = new Set(['principal-test', 'role-test', 'event-test',
+  'fact-test', 'memory-test', 'investor-test']);
 const state = path.join(PKG, 'state-template/coach.sqlite');
 if (fs.existsSync(state)) {
   const db = new DatabaseSync(state, { readOnly: true });
   for (const t of ['memories', 'roles', 'deliverables', 'narrative_coverage', 'cv_lines',
     'debrief_capture', 'learnings', 'commitments', 'contacts', 'investor_roster']) {
     try {
-      const n = db.prepare(`SELECT COUNT(*) c FROM ${t}`).get().c;
-      ok(n === 0, `${t} is empty (${n} rows)`);
+      const rows = db.prepare(`SELECT * FROM ${t}`).all();
+      const foreign = rows.filter((r) => !SYNTHETIC_IDS.has(String(r.id ?? r.key ?? '')));
+      ok(foreign.length === 0, `${t} carries only declared synthetic fixture rows (${rows.length} rows, ${foreign.length} foreign)`);
     } catch { /* table absent in an older schema: not a scrub failure */ }
   }
   // green_flags is DOCTRINE, not his data, and is expected to be POPULATED.
@@ -78,8 +85,10 @@ const lib = path.join(PKG, 'library/library.sqlite');
 if (fs.existsSync(lib)) {
   const db = new DatabaseSync(lib, { readOnly: true });
   try {
-    const n = db.prepare('SELECT COUNT(*) c FROM market_deals').get().c;
-    ok(n === 0, `market_deals is empty (${n} rows) — the deal baseline is licensed`);
+    // The licensed baseline must be absent; the single declared synthetic verifier
+    // fixture row ('deal-test') is permitted. Any other row is licensed data.
+    const n = db.prepare(`SELECT COUNT(*) c FROM market_deals WHERE deal_id IS NOT 'deal-test'`).get().c;
+    ok(n === 0, `market_deals carries no licensed rows (${n} beyond the synthetic fixture)`);
   } catch { /* table absent */ }
   db.close();
 }

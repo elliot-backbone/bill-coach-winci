@@ -52,7 +52,7 @@ ok(r.decision !== 'block', 'the same turn with the save passes');
 r = stop(transcript({ ask: 'Write my CV out in full.', reply: LONG, tools: [gate, savedNoDeliv] }));
 ok(r.decision === 'block', 'saving only learnings does not count as saving the artefact');
 
-r = stop(transcript({ ask: 'Write my CV out in full.', reply: 'Before I do that — what were the actual numbers at Checker?', tools: [gate] }));
+r = stop(transcript({ ask: 'Write my CV out in full.', reply: 'Before I do that — what were the actual numbers at Northwind?', tools: [gate] }));
 ok(r.decision !== 'block', 'a clarifying question is not an artefact and passes');
 
 r = stop(transcript({ ask: 'How did the call go, do you think?', reply: LONG, tools: [gate] }));

@@ -9,6 +9,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
+import { pathToFileURL } from 'node:url';
 
 const pkg = path.resolve(process.argv[2]);
 let failures = 0;
@@ -34,8 +36,8 @@ async function probe(name, fn) {
 }
 
 function makeDataDir(label = 'plain') {
-  // A directory name with a space and a non-ASCII character: Windows home dirs
-  // are "C:\Users\Bill Jennings" far more often than not.
+  // A synthetic directory name with a space and a non-ASCII character exercises
+  // the ordinary Windows home-path shape without carrying a principal's name.
   const base = label === 'awkward'
     ? fs.mkdtempSync(path.join(os.tmpdir(), 'bill hard éx-'))
     : fs.mkdtempSync(path.join(os.tmpdir(), 'bill-hard-'));
@@ -267,6 +269,126 @@ await probe('Two coach windows against one database', async () => {
     const blob = JSON.stringify(seen.data);
     check(blob.includes('win-a') && blob.includes('win-b'), 'window one sees the write window two retried', blob.slice(0, 200));
   } finally { await a.stop(); await b.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The ordinary two-window probe above proves the public recovery path, but its calls are
+// deliberately awaited in sequence. These interleavings put a rival SQLite connection in the
+// exact boundary between a stale implementation's read and BEGIN. They fail deterministically
+// if the decision is outside the lock; timing loops cannot give that guarantee on CI.
+await probe('Session decisions occur under the SQLite writer lock', async () => {
+  const memory = await import(pathToFileURL(path.join(pkg, 'plugin', 'runtime', 'memory.mjs')).href);
+  const lifecycle = await import(pathToFileURL(path.join(pkg, 'plugin', 'runtime', 'lifecycle.mjs')).href);
+  const dirs = [];
+  const fresh = () => {
+    const dir = makeDataDir();
+    dirs.push(dir);
+    const statePath = path.join(dir, 'state', 'coach.sqlite');
+    const state = new DatabaseSync(statePath);
+    state.exec('PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON');
+    return { dir, statePath, state };
+  };
+  const seedSession = (state, id) => {
+    const at = '2026-08-23T12:00:00.000Z';
+    state.prepare(`INSERT INTO sessions (id, started_at, updated_at, status, version)
+                   VALUES (?, ?, ?, 'active', 1)`).run(id, at, at);
+  };
+  const injectRivalBeforeBegin = (primary, statePath, rivalWork) => {
+    let injected = false;
+    return {
+      prepare(sql) { return primary.prepare(sql); },
+      exec(sql) {
+        if (!injected && sql === 'BEGIN IMMEDIATE') {
+          injected = true;
+          const rival = new DatabaseSync(statePath);
+          rival.exec('PRAGMA busy_timeout=10000; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE');
+          try {
+            rivalWork(rival);
+            rival.exec('COMMIT');
+          } catch (err) {
+            try { rival.exec('ROLLBACK'); } catch { /* already rolled back */ }
+            throw err;
+          } finally {
+            rival.close();
+          }
+        }
+        return primary.exec(sql);
+      },
+    };
+  };
+
+  try {
+    // save_coaching_state: the rival advances v1 -> v2 immediately before this call can lock.
+    // A stale pre-BEGIN read used to write the CV, miss the guarded session UPDATE, commit and
+    // report success. The locked read must instead see v2 and write nothing.
+    {
+      const { state, statePath } = fresh();
+      seedSession(state, 'race-save');
+      const wrapped = injectRivalBeforeBegin(state, statePath, (rival) => {
+        rival.prepare(`UPDATE sessions SET version=2, judgment='rival save won', updated_at=?
+                       WHERE id='race-save' AND version=1`).run('2026-08-23T12:00:01.000Z');
+      });
+      const result = memory.saveCoachingState(wrapped, {
+        session_id: 'race-save', expected_session_version: 1,
+        deliverables: [{ kind: 'cv', title: 'stale writer CV', body: 'must not persist' }],
+        session: { status: 'active', judgment: 'stale writer', evidence_ids: [], open_questions: [] },
+      }, '2026-08-23T12:00:02.000Z');
+      check((result.conflicts ?? []).some((c) => c.type === 'session_version' && c.actual === 2),
+        'a rival commit before save lock is returned as a version conflict', JSON.stringify(result));
+      check(state.prepare('SELECT COUNT(*) n FROM deliverables').get().n === 0,
+        'the stale save commits no deliverable rows');
+      const current = state.prepare("SELECT version, judgment FROM sessions WHERE id='race-save'").get();
+      check(current?.version === 2 && current?.judgment === 'rival save won',
+        'the stale save preserves the rival session state', JSON.stringify(current));
+      state.close();
+    }
+
+    // end_coach previously had the same pre-lock read plus an unguarded final UPDATE by id,
+    // allowing a stale window to overwrite newer judgment and close the session.
+    {
+      const { state, statePath } = fresh();
+      seedSession(state, 'race-end');
+      const wrapped = injectRivalBeforeBegin(state, statePath, (rival) => {
+        rival.prepare(`UPDATE sessions SET version=2, judgment='rival end won',
+                         next_move='keep working', updated_at=?
+                       WHERE id='race-end' AND version=1`).run('2026-08-23T12:00:01.000Z');
+      });
+      const result = lifecycle.endCoach(wrapped, {
+        session_id: 'race-end', expected_session_version: 1,
+        judgment: 'stale close', next_move: 'stale move',
+      }, '2026-08-23T12:00:02.000Z');
+      check(result.error === 'session_version_conflict' && result.session_version === 2,
+        'a rival commit before close lock is returned as a version conflict', JSON.stringify(result));
+      const current = state.prepare("SELECT status, version, judgment, next_move FROM sessions WHERE id='race-end'").get();
+      check(current?.status === 'active' && current?.version === 2
+        && current?.judgment === 'rival end won' && current?.next_move === 'keep working',
+      'the stale close neither overwrites nor closes the rival session', JSON.stringify(current));
+      state.close();
+    }
+
+    // start_coach used to inspect the active set before locking. If both windows saw no active
+    // row they each inserted one after serializing, leaving two active episodes.
+    {
+      const { dir, state, statePath } = fresh();
+      const library = new DatabaseSync(path.join(dir, 'library', 'library.sqlite'), { readOnly: true });
+      const wrapped = injectRivalBeforeBegin(state, statePath, (rival) => {
+        rival.prepare(`INSERT INTO sessions (id, started_at, updated_at, status, version)
+                       VALUES ('rival-active', ?, ?, 'active', 1)`)
+          .run('2026-08-23T12:00:00.500Z', '2026-08-23T12:00:00.500Z');
+      });
+      const result = lifecycle.startCoach(wrapped, library, {
+        user_message: 'race start', now: '2026-08-23T12:00:01.000Z',
+      });
+      const active = state.prepare("SELECT id FROM sessions WHERE status='active' ORDER BY id").all();
+      check(active.length === 1 && active[0]?.id === 'rival-active',
+        'simultaneous starts leave exactly one active session', JSON.stringify(active));
+      check(result.session_id === 'rival-active',
+        'the later start resumes the session that won the writer lock', JSON.stringify(result).slice(0, 200));
+      library.close();
+      state.close();
+    }
+  } finally {
+    for (const dir of dirs) fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 await probe('Repeated simultaneous boots (the race, ten times)', async () => {

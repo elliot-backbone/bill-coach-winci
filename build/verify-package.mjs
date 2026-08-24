@@ -12,6 +12,14 @@ let failures = 0;
 const ok = (label) => console.log(`  ok   ${label}`);
 const bad = (label) => { console.log(`  FAIL ${label}`); failures += 1; };
 const check = (cond, label) => (cond ? ok(label) : bad(label));
+const versionCompare = (a, b) => {
+  const left = String(a ?? '').split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const right = String(b ?? '').split('.').map((part) => Number.parseInt(part, 10) || 0);
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    if ((left[index] ?? 0) !== (right[index] ?? 0)) return (left[index] ?? 0) - (right[index] ?? 0);
+  }
+  return 0;
+};
 
 console.log(`verifying ${PKG}`);
 
@@ -26,8 +34,12 @@ const REQUIRED = [
   'plugin/.claude-plugin/plugin.json', 'plugin/hooks/hooks.json',
   'plugin/skills/coach/SKILL.md',
   'plugin/runtime/server.mjs', 'plugin/runtime/lifecycle.mjs', 'plugin/runtime/memory.mjs',
+  'plugin/runtime/style.mjs', 'plugin/runtime/gate.mjs',
   'plugin/runtime/funnel.mjs', 'plugin/runtime/statesearch.mjs', 'plugin/runtime/onboarding.mjs',
   'plugin/runtime/library.mjs', 'plugin/runtime/context.mjs', 'plugin/runtime/sources.mjs',
+  'plugin/authorities/bill-voice-covenant.v1.json',
+  'plugin/authorities/style-prohibition-register.v1.json',
+  'plugin/authorities/ai-writing-signs-register.v1.json',
   'plugin/coach/identity.md', 'plugin/coach/principal.md', 'plugin/coach/principal-profile.json',
   'plugin/coach/method.md', 'plugin/coach/funnel-doctrine.md', 'plugin/coach/sourcing.md',
   'plugin/coach/narrative.md', 'plugin/coach/deliverables.md', 'plugin/coach/voice.md',
@@ -72,7 +84,9 @@ for (const f of CODE_AND_CONTENT) {
   // this arrives before the first token of every turn, and a prompt nobody finishes is a
   // prompt nobody follows.
   // 1.13.2: the STATIC DOCTRINE block (13.8 KB, formerly re-shipped in every
-  // start_coach result) now lives here deliberately; budget raised to cover it.
+  // start_coach result) now lives here deliberately — written to prompt cache once
+  // per session instead of re-serialized into every round-trip. Budget raised to
+  // cover it; the block's content parity is asserted by static-doctrine-parity-test.
   check(sp.length < 21000, `system prompt stays within budget (${sp.length} chars, budget 21000)`);
   check(sp.includes('STATIC DOCTRINE BEGIN'), 'system prompt carries the rendered STATIC DOCTRINE block');
 }
@@ -80,9 +94,55 @@ for (const f of CODE_AND_CONTENT) {
 check(mitchellHits.length === 0, `no Mitchell/Lava references (${mitchellHits.join(', ') || 'clean'})`);
 check(careerCoachHits.length === 0, `no "career coach" in Bill-facing prose (${careerCoachHits.join(', ') || 'clean'})`);
 
+// Distribution version and app runtime version are intentionally different namespaces. The
+// manifest is the single app-version authority; every installed/runtime surface must agree
+// with manifest.app_version, while manifest.version may advance for packaging-only releases.
+try {
+  const manifest = JSON.parse(readFileSync(path.join(PKG, 'manifest.json'), 'utf8'));
+  const pluginMeta = JSON.parse(readFileSync(path.join(PKG, 'plugin/.claude-plugin/plugin.json'), 'utf8'));
+  const stateMetaFile = JSON.parse(readFileSync(path.join(PKG, 'state-template/package.json'), 'utf8'));
+  const server = readFileSync(path.join(PKG, 'plugin/runtime/server.mjs'), 'utf8');
+  const installer = readFileSync(path.join(PKG, 'install/install.mjs'), 'utf8');
+  const launcher = readFileSync(path.join(PKG, 'launcher/coach.mjs'), 'utf8');
+  const serverVersion = server.match(/const SERVER\s*=\s*\{[^}]*version:\s*'([^']+)'/)?.[1];
+  const installerClientVersion = installer.match(/clientInfo:\s*\{\s*name:\s*'bill-coach-installer',\s*version:\s*'([^']+)'/)?.[1];
+  const launcherNodeFloor = launcher.match(/const MIN_NODE\s*=\s*'([^']+)'/)?.[1];
+  const launcherClaudeFloor = launcher.match(/const MIN_CLAUDE\s*=\s*'([^']+)'/)?.[1];
+  const installerNodeFloor = installer.match(/export const MIN_NODE\s*=\s*'([^']+)'/)?.[1];
+  const installerClaudeFloor = installer.match(/export const MIN_CLAUDE\s*=\s*'([^']+)'/)?.[1];
+  const appVersions = [pluginMeta.version, stateMetaFile.app_version, serverVersion, installerClientVersion];
+  check(/^\d+\.\d+\.\d+$/.test(manifest.app_version ?? ''), `manifest app_version is canonical (${manifest.app_version})`);
+  check(appVersions.every((version) => version === manifest.app_version),
+    `app version coherent across plugin/state/server/installer (${appVersions.join(', ')})`);
+  check(/^\d+\.\d+\.\d+$/.test(manifest.minimum_node ?? '')
+      && /^\d+\.\d+\.\d+$/.test(manifest.minimum_claude_code ?? ''),
+  'canonical minimum_node and minimum_claude_code fields exist');
+  check(versionCompare(manifest.minimum_node, launcherNodeFloor) >= 0
+      && versionCompare(manifest.minimum_node, installerNodeFloor) >= 0,
+  `manifest Node floor ${manifest.minimum_node} meets launcher/installer floors`);
+  check(versionCompare(manifest.minimum_claude_code, launcherClaudeFloor) >= 0
+      && versionCompare(manifest.minimum_claude_code, installerClaudeFloor) >= 0,
+  `manifest Claude floor ${manifest.minimum_claude_code} meets launcher/installer floors`);
+  check(manifest.minimum_node === launcherNodeFloor && manifest.minimum_node === installerNodeFloor,
+    `Node minimum is identical across manifest/launcher/installer (${manifest.minimum_node})`);
+  check(manifest.minimum_claude_code === launcherClaudeFloor
+      && manifest.minimum_claude_code === installerClaudeFloor,
+  `Claude minimum is identical across manifest/launcher/installer (${manifest.minimum_claude_code})`);
+  check(/manifest\.minimum_node\s*\?\?\s*manifest\.min_node/.test(installer)
+      && /manifest\.minimum_claude_code\s*\?\?\s*manifest\.min_claude/.test(installer),
+  'installer honors canonical minimum fields with legacy aliases only as fallback');
+
+  const stateDb = new DatabaseSync(path.join(PKG, 'state-template/coach.sqlite'), { readOnly: true });
+  const dbAppVersion = stateDb.prepare(`SELECT value FROM state_meta WHERE key = 'app_version'`).get()?.value;
+  stateDb.close();
+  check(dbAppVersion === manifest.app_version, `state DB app_version matches manifest (${dbAppVersion})`);
+} catch (err) { bad(`version coherence: ${err.message}`); }
+
 // ---- 3. state template ------------------------------------------------------
 try {
   const st = new DatabaseSync(path.join(PKG, 'state-template', 'coach.sqlite'), { readOnly: true });
+  check(st.prepare('PRAGMA integrity_check').get()?.integrity_check === 'ok', 'state DB integrity_check = ok');
+  check(st.prepare('PRAGMA foreign_key_check').all().length === 0, 'state DB foreign_key_check = clean');
   const tables = st.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`).all().map((r) => r.name);
   for (const t of ['roles', 'role_events', 'interactions', 'offers', 'contacts', 'learnings', 'voice_deltas', 'investor_roster', 'sourcing_runs', 'onboarding', 'memories', 'metrics', 'commitments', 'sessions']) {
     check(tables.includes(t), `state table ${t}`);
@@ -104,10 +164,14 @@ try {
 // ---- 4. library -------------------------------------------------------------
 try {
   const lib = new DatabaseSync(path.join(PKG, 'library', 'library.sqlite'), { readOnly: true });
+  check(lib.prepare('PRAGMA integrity_check').get()?.integrity_check === 'ok', 'library DB integrity_check = ok');
+  check(lib.prepare('PRAGMA foreign_key_check').all().length === 0, 'library DB foreign_key_check = clean');
   check(lib.prepare('SELECT COUNT(*) AS n FROM market_deals').get().n === 1504, 'market_deals = 1504');
   check(lib.prepare('SELECT COUNT(*) AS n FROM doctrine').get().n === 1480, 'doctrine units = 1480');
   const billDocs = lib.prepare(`SELECT COUNT(*) AS n FROM documents WHERE id LIKE 'bill-doctrine:%'`).get().n;
   check(billDocs === 12, `bill career corpus docs = 12 (${billDocs})`);
+  const libraryKind = lib.prepare(`SELECT value FROM library_meta WHERE key = 'library_kind'`).get()?.value;
+  check(libraryKind === 'bill-career-coach', `library kind is Bill-native (${libraryKind})`);
   const leak = lib.prepare(`SELECT COUNT(*) AS n FROM chunks WHERE lower(text) LIKE '%astroforge%' OR lower(text) LIKE '%lendtable%'`).get().n;
   check(leak === 0, 'library leak check clean');
   const fts = lib.prepare(`SELECT COUNT(*) AS n FROM market_deals_fts WHERE market_deals_fts MATCH '"Intropy"'`).get().n;
@@ -118,9 +182,14 @@ try {
 // ---- 5. runtime syntax + tool surface --------------------------------------
 try {
   const server = readFileSync(path.join(PKG, 'plugin/runtime/server.mjs'), 'utf8');
-  for (const t of ['start_coach', 'get_context', 'search_library', 'save_coaching_state', 'inspect_memory', 'sync_source', 'end_coach', 'search_state', 'update_state', 'bill_command']) {
+  const expectedTools = ['start_coach', 'get_context', 'search_library', 'save_coaching_state', 'inspect_memory', 'sync_source', 'review_draft', 'end_coach', 'search_state', 'update_state', 'bill_command'];
+  const actualTools = [...server.matchAll(/^\s+name: '([a-z_]+)',\s*$/gm)].map((match) => match[1]);
+  for (const t of expectedTools) {
     check(server.includes(`name: '${t}'`), `tool registered: ${t}`);
   }
+  check(actualTools.length === expectedTools.length
+      && actualTools.every((tool) => expectedTools.includes(tool)),
+  `tool surface is exactly eleven registered tools (${actualTools.join(', ')})`);
   const lifecycle = readFileSync(path.join(PKG, 'plugin/runtime/lifecycle.mjs'), 'utf8');
   check(lifecycle.includes('BILL_CONTRACT'), 'BILL_CONTRACT present');
   check(lifecycle.includes('unclosed-work') || lifecycle.includes('UNCLOSED-WORK'), 'unclosed-work guard present');

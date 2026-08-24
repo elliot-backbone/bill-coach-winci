@@ -1,11 +1,9 @@
 // The tight-five coverage gate, the green flag library, and the response-shape rules.
 //
-// MEASURED 2026-08-22: asked for the tight five, Coach took Bill's opening anecdote about a
-// £240k deal, mined it, and had story one drafted by turn two. Four turns, 1,496 words, and it
-// never asked where he grew up. The operator's own two biographical interviews with a founder
-// ran 103 questions across 271 turns and 10,683 words from the subject, over two sittings,
-// and opened on family and money. narrative.md already said "do NOT open at his career". It
-// lost to Bill's first sentence, which is what instruction does when it meets momentum.
+// Regression: a shallow run mined the opening work anecdote and drafted story one by turn two
+// without asking about childhood. The long-form biographical method already said "do NOT open
+// at his career", but it lost to the first sentence in the chat. This fixture proves the guard
+// without carrying a principal's real anecdote or interview record.
 //
 // Usage: node narrative-gate-test.mjs <package> <installed-home>
 
@@ -59,20 +57,21 @@ function stop(file) {
 }
 const GATE = 'mcp__bill-coach__review_draft';
 
-// ---- 1. the gate ----------------------------------------------------------
-// The unclosed-work guard is LIVE since 1.13.2 (previously dead code: use-after-close
-// threw on every call). These fixtures test the NARRATIVE guards; satisfy the learning
-// rule up front so an unrelated live guard cannot block the cases below.
+// The unclosed-work guard is LIVE since 1.13.2 (it was dead code before — a
+// use-after-close threw on every invocation). These fixtures exercise the
+// NARRATIVE guards over a home whose earlier suites moved the funnel, so satisfy
+// the learning rule up front rather than letting an unrelated guard block.
 {
   const seedDb = new DatabaseSync(path.join(DATA, 'state', 'coach.sqlite'));
   seedDb.exec('PRAGMA busy_timeout = 10000');
-  const nowSeed = new Date().toISOString();
+  const now = new Date().toISOString();
   seedDb.prepare(`INSERT OR REPLACE INTO learnings (id, category, learning, evidence, source_kind, source_id, fed_into_json, occurred_at, created_at)
                   VALUES ('learn-narr-fixture', 'process', 'fixture learning satisfying the unclosed-work guard', 'fixture', 'session', 'sess-fixture', '[]', ?, ?)`)
-    .run(nowSeed, nowSeed);
+    .run(now, now);
   seedDb.close();
 }
 
+// ---- 1. the gate ----------------------------------------------------------
 console.log('the coverage gate');
 let r = stop(transcript('Do the tight five.', DRAFT, [GATE]));
 ok(r.decision === 'block' && /before the interview has happened/.test(r.reason ?? ''),
@@ -139,12 +138,12 @@ const before = db.prepare("SELECT current_rank FROM green_flags WHERE name='make
 saveCoachingState(db, {
   session_id: sid.id,
   expected_session_version: db.prepare('SELECT version FROM sessions WHERE id=?').get(sid.id).version,
-  green_flags: [{ name: 'makes_others_good', current_rank: 1, surfaced: true, landed: true, rank_reason: 'seed founder hiring a first commercial hire' }],
+  green_flags: [{ name: 'makes_others_good', current_rank: 1, surfaced: true, landed: true, rank_reason: 'synthetic early-stage commercial lead search' }],
 });
 const after = db.prepare("SELECT * FROM green_flags WHERE name='makes_others_good'").get();
 ok(after.current_rank === 1 && before !== 1, 'a flag can be re-ranked for the conversation in hand');
 ok(after.times_surfaced === 1 && after.times_landed === 1, 'surfacing and landing are counted');
-ok(after.rank_reason?.includes('seed founder'), 'the reason for the rank is recorded');
+ok(after.rank_reason === 'synthetic early-stage commercial lead search', 'the supplied reason for the rank is recorded exactly');
 
 const unknown = saveCoachingState(db, {
   session_id: sid.id,

@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+
+
 const pkg = path.resolve(process.argv[2]);
 let failures = 0;
 const notes = [];
@@ -68,6 +70,28 @@ const SID = sess.session_id;
 
 const P = (target, fields, provenance) => call('update_state', { target, fields, provenance, session_id: SID });
 const move = (roleId, to, provenance) => P(`roles:${roleId}`, { action: 'transition', to_phase: to }, provenance);
+
+// Since 2026-08-23, P0->P1 needs at least one SOURCED fact on file: the funnel doctrine always
+// said so and the code finally checks it. A test that creates a role from nothing has to do
+// what a real session does — record what was established and where it came from — or it is
+// testing a path Bill can no longer take.
+// The session version moves with every save, so the first attempt reports the real one and the
+// second uses it. This is exactly the retry the tool documents for a live caller.
+async function sourceFactFor(roleId) {
+  if (!roleId) return null;
+  const body = (v) => ({
+    session_id: SID,
+    expected_session_version: v,
+    facts: [{ role_id: roleId, kind: 'other', claim: 'test fixture: the company exists',
+      as_of: '2026-08', source: 'test fixture' }],
+  });
+  let r = await call('save_coaching_state', body(1));
+  const actual = r.data?.session_version;
+  if (r.data?.conflicts?.some((c) => c.type === 'session_version') && actual) {
+    r = await call('save_coaching_state', body(actual));
+  }
+  return r;
+}
 const phaseOf = async (roleId) => {
   const r = await call('search_state', { query: 'Northwind', tables: ['roles'] });
   const rows = r.data?.matches ?? r.data?.roles ?? [];
@@ -82,6 +106,7 @@ const created = await P('roles:new',
   'bill-said: worth a look, seed-stage, no sales hire yet');
 check(created.ok, 'a company enters at P0', JSON.stringify(created.data).slice(0, 250));
 const ROLE = created.data?.role_id ?? created.data?.id;
+await sourceFactFor(ROLE);
 note(`role id: ${ROLE}`);
 check((await phaseOf(ROLE)) === 'P0' || true, 'the new row starts at P0');
 
@@ -100,7 +125,7 @@ section('P0 -> P1 — needs Bill\'s own verdict');
   check(/"updated":0|applied_nothing/.test(guardMsg), 'the rejected write reports that it changed nothing',
     guardMsg.slice(0, 250));
 
-  const recorded = await P(`roles:${ROLE}`, { bill_fit: { verdict: 'go', why: 'first commercial hire, founder-led' } },
+  const recorded = await P(`roles:${ROLE}`, { bill_fit: { verdict: 'go', why: 'strong scope match, evidence dated' } },
     'bill-said: yes, go on that one');
   check(recorded.ok, 'Bill\'s verdict is recorded with bill-said provenance', JSON.stringify(recorded.data).slice(0, 250));
 
@@ -108,6 +133,7 @@ section('P0 -> P1 — needs Bill\'s own verdict');
   // behind it. However Bill's yes is phrased, it has to reach the gate as one.
   for (const spelling of ['Go', 'yes', ' go']) {
     const probe = await P('roles:new', { company: `Verdict ${spelling}`, lane: 'core-ft', source: 'test' }, 'bill-said: look');
+    await sourceFactFor(probe.data?.role_id ?? probe.data?.id);
     const pid = probe.data?.role_id;
     await P(`roles:${pid}`, { bill_fit: { verdict: spelling } }, 'bill-said: yes');
     const advanced = await move(pid, 'P1', 'bill-said: on it');

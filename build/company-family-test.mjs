@@ -97,7 +97,7 @@ if (bare) {
 // ---- 3. rehearsal, and the gate that blocks stopping ----------------------
 console.log('\nrehearsal, inverted gate');
 save({ rehearsal_rounds: [{
-  topic: 'why you left Checker', question: 'So why did you actually leave?',
+  topic: 'why you left Northwind', question: 'So why did you actually leave?',
   escalation: 1, his_answer: 'It was time for a change', verdict: 'weak',
   what_was_weak: 'no reason given, sounds evasive', source: 'debrief',
 }] });
@@ -105,8 +105,8 @@ let rows = db.prepare('SELECT * FROM rehearsal_rounds').all();
 ok(rows.length === 1 && rows[0].round === 1, 'the first attempt is round 1');
 
 save({ rehearsal_rounds: [{
-  topic: 'why you left Checker', question: 'So why did you actually leave?',
-  escalation: 2, his_answer: 'The family business had stopped teaching me anything', verdict: 'holding',
+  topic: 'why you left Northwind', question: 'So why did you actually leave?',
+  escalation: 2, his_answer: 'The business had stopped teaching me anything', verdict: 'holding',
 }] });
 rows = db.prepare('SELECT * FROM rehearsal_rounds ORDER BY round').all();
 ok(rows.length === 2 && rows[1].round === 2, 'a second attempt is a new round, not an overwrite');
@@ -132,7 +132,7 @@ const windingUp = `Good work on that. ${'You are in much better shape on this th
 
 // Make the latest verdict weak again, so something genuinely stands unresolved.
 save({ rehearsal_rounds: [{
-  topic: 'why you left Checker', question: 'So why did you actually leave?',
+  topic: 'why you left Northwind', question: 'So why did you actually leave?',
   escalation: 3, his_answer: 'I mean, it was complicated', verdict: 'weak', what_was_weak: 'retreated again',
 }] });
 let r = stop(transcript('Can we rehearse the leaving question?', windingUp));
@@ -140,11 +140,11 @@ ok(r.decision === 'block' && /still rated weak/.test(r.reason ?? ''),
   'winding up with a weak answer outstanding is blocked');
 ok(/hostile version/.test(r.reason ?? ''), 'and it escalates rather than repeating the same round');
 
-r = stop(transcript('Can we rehearse the leaving question?', 'Right, again. Why did you leave Checker?'));
+r = stop(transcript('Can we rehearse the leaving question?', 'Right, again. Why did you leave Northwind?'));
 ok(!/still rated weak/.test(r.reason ?? ''), 'putting it to him again is never blocked');
 
 save({ rehearsal_rounds: [{
-  topic: 'why you left Checker', question: 'So why did you actually leave?',
+  topic: 'why you left Northwind', question: 'So why did you actually leave?',
   escalation: 3, his_answer: 'I had learned everything that business could teach me and I wanted a harder problem',
   verdict: 'strong',
 }] });

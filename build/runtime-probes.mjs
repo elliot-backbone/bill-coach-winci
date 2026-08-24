@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 
+
+
 const pkg = path.resolve(process.argv[2]);
 let failures = 0;
 const notes = [];
@@ -105,6 +107,17 @@ await probe('Funnel writes (update_state)', async () => {
       target: `roles:${roleId}`, session_id: sess.session_id, provenance: 'bill-said: yes, go on that one',
       fields: { bill_fit: { verdict: 'go' } },
     });
+    // Since 2026-08-23 the P0 guard also requires a SOURCED fact, which the funnel doctrine
+    // has always demanded and the code never checked. A probe that promotes on nothing is
+    // exercising a path Bill can no longer take.
+    // The P0 guard has required a SOURCED fact since 2026-08-23, so the probe records one the
+    // way a real session would. It goes through `bump` like every other write here, because the
+    // session version moves with each save and the probes below assume the tracked one.
+    bump(await call('save_coaching_state', {
+      session_id: sess.session_id, expected_session_version: ver,
+      facts: [{ role_id: roleId, kind: 'other', claim: 'probe fixture: the company exists',
+        as_of: '2026-08', source: 'probe fixture' }],
+    }));
     const moved = await call('update_state', {
       target: `roles:${roleId}`, session_id: sess.session_id, provenance: 'bill-said: he sent the application',
       fields: { action: 'transition', to_phase: 'P1' },

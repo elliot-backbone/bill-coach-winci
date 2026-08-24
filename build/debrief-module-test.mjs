@@ -1,10 +1,8 @@
 // The debrief, and the compounding rule.
 //
-// MEASURED 2026-08-22: Bill's own debrief of a founder call was "went alright, he liked the
-// Checker story, asked twice about whether I'd be OK without a team under me. I waffled on
-// that." Coach asked fifteen questions and wrote it up. Everything downstream eats from here —
-// learnings, voice deltas, funnel movement, and what the next brief knows — and this material
-// is recoverable for about a day.
+// Regression: a shallow synthetic debrief said only "went fine, they liked one example" and
+// omitted the evidence every downstream module needs. Learnings, voice deltas, funnel movement
+// and the next brief all eat from here, while the source material decays quickly.
 //
 // OPERATOR RULING 2026-08-23: a company opportunity is a SEQUENCE of meetings. A prep brief
 // written without the previous meeting's debrief throws away the only advantage he has going
@@ -96,10 +94,10 @@ const stop = (f) => {
 };
 const writeUp = `Here is the debrief. ${'What happened, what it tells us, and what comes next for this one. '.repeat(20)}`;
 
-let r = stop(transcript('Northwind call done. Went alright.', writeUp));
+let r = stop(transcript('Northwind call done. Went fine.', writeUp));
 ok(r.decision === 'block' && /of 7 slots/.test(r.reason ?? ''),
   'writing up the debrief on one captured slot is blocked, and it says how many are missing');
-ok(/went alright/.test(r.reason ?? ''), 'and it names the vibe answer it should refuse to accept');
+ok(/went fine/.test(r.reason ?? ''), 'and it names the vibe answer it should refuse to accept');
 
 save({ debrief_capture: SLOTS.slice(1, 6).map((s) => ({ role_id: roleId, slot: s, detail: `something real about ${s}` })) });
 r = stop(transcript('Northwind call done.', writeUp));

@@ -88,7 +88,7 @@ ok((noEvidence.conflicts || []).some((c) => c.table === 'positions_held'),
 
 save({ positions_held: [{
   position: 'Most first sales hires fail because the founder never actually stopped selling',
-  evidence: 'watched it happen at three companies he sold into, and did it himself at Checker',
+  evidence: 'watched it happen at three companies he sold into, and did it himself at Northwind',
   who_disagrees: 'founders who think the problem was the hire',
   public_ok: false,
 }] });
@@ -98,7 +98,7 @@ ok(r.decision === 'block' && /never publishes/.test(r.reason ?? ''),
 
 save({ positions_held: [{
   position: 'Most first sales hires fail because the founder never actually stopped selling',
-  evidence: 'watched it happen at three companies he sold into, and did it himself at Checker',
+  evidence: 'watched it happen at three companies he sold into, and did it himself at Northwind',
   public_ok: true,
 }] });
 r = stop(transcript('Write me some LinkedIn posts.', longReply));
@@ -117,9 +117,17 @@ save({ narrative_coverage: SLOTS.map((s) => ({ slot: s, scene: `a scene for ${s}
 r = stop(transcript('I need a one-pager I can send to an intro.', longReply));
 ok(!/8 slots covered/.test(r.reason ?? ''), 'with the interview complete, the one-pager may be written');
 
+r = stop(transcript('I found them, I did the outreach, I did all of it.', longReply));
+ok(!/no positioning one-pager/.test(r.reason ?? ''),
+  'past-tense outreach evidence does not masquerade as a request to write outreach');
+
 r = stop(transcript('I want to reach out cold to a few of them.', longReply));
 ok(r.decision === 'block' && /no positioning one-pager/.test(r.reason ?? ''),
   'outreach is blocked while no one-pager is live');
+
+r = stop(transcript('Draft the outreach for these three founders.', longReply));
+ok(r.decision === 'block' && /no positioning one-pager/.test(r.reason ?? ''),
+  'a direct drafting request still activates the outreach guard');
 
 save({ deliverables: [{ kind: 'positioning_one_pager', title: 'What Bill is for', body: 'The finished page.' }] });
 r = stop(transcript('I want to reach out cold to a few of them.', longReply));

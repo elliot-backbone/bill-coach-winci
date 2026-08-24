@@ -247,7 +247,10 @@ try {
   mcp.close();
 }
 
-const hook = spawnSync(process.execPath, [path.join(pkg, 'plugin', 'runtime', 'lifecycle.mjs'), 'hook-post-compact'], {
+// lifecycle.mjs only answers a hook when import.meta.url matches argv[1]
+// exactly; a non-canonical path (/tmp symlink on macOS, RUNNER~1 8.3 short
+// names on Windows runners) makes it exit silently. Canonicalize first.
+const hook = spawnSync(process.execPath, [path.join(fs.realpathSync(pkg), 'plugin', 'runtime', 'lifecycle.mjs'), 'hook-post-compact'], {
   env: { ...process.env, BILL_COACH_DATA_DIR: temp }, input: '{}\n', encoding: 'utf8', timeout: 10_000,
 });
 let postCompact = {};

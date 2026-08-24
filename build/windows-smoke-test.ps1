@@ -272,11 +272,13 @@ try {
   } else { Write-Host '  (doctrine-conformance-test.mjs not found; skipping)' -ForegroundColor Yellow }
 
   # ---------------------------------------------------------------- migration
-  # Schema 2 renames people -> principal_profile. It runs against Bill's live memory,
-  # so it is proven here against a real pre-1.3 database with rows in it.
+  # Schema 2 renames people -> principal_profile. This runs only when an explicit
+  # pre-1.3 package is supplied with -OldPkg. The public Windows workflow carries no
+  # such private fixture, so it states that absence and this section skips there;
+  # the real-row migration remains covered by the local build suite.
   Section 'Schema migration'
   $migScript = Join-Path $PSScriptRoot 'migration-test.mjs'
-  if ((Test-Path $migScript) -and (Test-Path $OldPkg)) {
+  if ((Test-Path $migScript) -and $OldPkg -and (Test-Path $OldPkg)) {
     $migOut = (& node $migScript $OldPkg $pkg 2>&1 | Out-String)
     Write-Host $migOut
     Check ($migOut -match 'MIGRATION TESTS PASSED') 'migration tests passed' `

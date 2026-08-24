@@ -65,6 +65,12 @@ jobs:
           node build\scrub-check.mjs "$env:RUNNER_TEMP\scrubcheck\package"
           if ($LASTEXITCODE -ne 0) { throw "THE PACKAGE IN THIS PUBLIC REPO CARRIES REAL DATA" }
 
+      - name: The scrubbed package manifest matches every byte
+        shell: pwsh
+        run: |
+          node build\manifest-integrity-test.mjs "$env:RUNNER_TEMP\scrubcheck\package"
+          if ($LASTEXITCODE -ne 0) { throw "the package manifest is stale or incomplete" }
+
       - name: Windows smoke test
         shell: pwsh
         run: |
@@ -146,4 +152,3 @@ jobs:
           node build\downstream-modules-test.mjs $pkg $home_
           if ($LASTEXITCODE -ne 0) { throw "downstream modules failed on Windows" }
           Write-Host "all seven gates hold on Windows"
-

@@ -182,14 +182,15 @@ try {
 // ---- 5. runtime syntax + tool surface --------------------------------------
 try {
   const server = readFileSync(path.join(PKG, 'plugin/runtime/server.mjs'), 'utf8');
-  const expectedTools = ['start_coach', 'get_context', 'search_library', 'save_coaching_state', 'inspect_memory', 'sync_source', 'review_draft', 'end_coach', 'search_state', 'update_state', 'bill_command'];
+  // 1.14: four engine tools joined the surface (Design V2 Stage 1).
+  const expectedTools = ['start_coach', 'get_context', 'search_library', 'save_coaching_state', 'inspect_memory', 'sync_source', 'review_draft', 'end_coach', 'search_state', 'update_state', 'bill_command', 'prepare_offer_review', 'prepare_weekly_catchup', 'prepare_debrief_review', 'check_gates'];
   const actualTools = [...server.matchAll(/^\s+name: '([a-z_]+)',\s*$/gm)].map((match) => match[1]);
   for (const t of expectedTools) {
     check(server.includes(`name: '${t}'`), `tool registered: ${t}`);
   }
   check(actualTools.length === expectedTools.length
       && actualTools.every((tool) => expectedTools.includes(tool)),
-  `tool surface is exactly eleven registered tools (${actualTools.join(', ')})`);
+  `tool surface is exactly fifteen registered tools (${actualTools.join(', ')})`);
   const lifecycle = readFileSync(path.join(PKG, 'plugin/runtime/lifecycle.mjs'), 'utf8');
   check(lifecycle.includes('BILL_CONTRACT'), 'BILL_CONTRACT present');
   check(lifecycle.includes('unclosed-work') || lifecycle.includes('UNCLOSED-WORK'), 'unclosed-work guard present');

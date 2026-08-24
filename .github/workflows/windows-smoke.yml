@@ -151,4 +151,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "company family failed on Windows" }
           node build\downstream-modules-test.mjs $pkg $home_
           if ($LASTEXITCODE -ne 0) { throw "downstream modules failed on Windows" }
-          Write-Host "all seven gates hold on Windows"
+          node build\engines-test.mjs $pkg
+          if ($LASTEXITCODE -ne 0) { throw "module engines failed on Windows" }
+          node build\streamed-register-test.mjs $home_ $pkg
+          if ($LASTEXITCODE -ne 0) { throw "streamed-register guard failed on Windows" }
+          node build\parrot-detector-test.mjs
+          if ($LASTEXITCODE -ne 0) { throw "parrot detector failed on Windows" }
+          Write-Host "all ten gates hold on Windows"

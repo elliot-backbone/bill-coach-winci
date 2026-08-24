@@ -365,8 +365,16 @@ check(!/reference_points_only/.test(aiAuthority), 'external reference-point corp
 check(fs.readFileSync(path.join(pkg, 'plugin', 'runtime', 'gate.mjs'), 'utf8').includes('bill-voice-covenant.v1.json'),
   'runtime reads the non-personal authority, not scrubbed coach prose');
 const buildDir = path.dirname(fileURLToPath(import.meta.url));
-const scrubber = fs.readFileSync(path.join(buildDir, 'make-test-package.mjs'), 'utf8');
-check(/name === 'system-prompt\.md'/.test(scrubber), 'privacy scrub preserves the protected non-personal prompt');
+// make-test-package.mjs lives only in the private estate build tree; the public
+// CI repo carries the scrubbed OUTPUT, never the scrubber. Skip its source
+// checks there rather than crash — the private release gate still runs them.
+const scrubberPath = path.join(buildDir, 'make-test-package.mjs');
+if (fs.existsSync(scrubberPath)) {
+  const scrubber = fs.readFileSync(scrubberPath, 'utf8');
+  check(/name === 'system-prompt\.md'/.test(scrubber), 'privacy scrub preserves the protected non-personal prompt');
+} else {
+  console.log('  ·    scrubber source not present (public CI tree); scrub-source checks run in the private gate');
+}
 check(/bill-voice-covenant\.v1\.json/.test(fs.readFileSync(path.join(buildDir, 'verify-package.mjs'), 'utf8')),
   'package verification requires the canonical authority');
 

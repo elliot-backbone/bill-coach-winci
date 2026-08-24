@@ -27,7 +27,7 @@ on:
       minutes:
         description: 'How long to hold the session open'
         required: true
-        default: '60'
+        default: '240'
       expected_version:
         description: 'Exact real package version expected from the private repo'
         required: true
@@ -36,7 +36,7 @@ on:
 jobs:
   session:
     runs-on: windows-latest
-    timeout-minutes: 125
+    timeout-minutes: 358
 
     steps:
       - uses: actions/checkout@v4

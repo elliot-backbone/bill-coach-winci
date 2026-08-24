@@ -71,7 +71,10 @@ for (const f of CODE_AND_CONTENT) {
   // rather than dropping a load-bearing rule to fit a number. It still has to stay SHORT:
   // this arrives before the first token of every turn, and a prompt nobody finishes is a
   // prompt nobody follows.
-  check(sp.length < 6000, `system prompt stays short (${sp.length} chars, budget 6000)`);
+  // 1.13.2: the STATIC DOCTRINE block (13.8 KB, formerly re-shipped in every
+  // start_coach result) now lives here deliberately; budget raised to cover it.
+  check(sp.length < 21000, `system prompt stays within budget (${sp.length} chars, budget 21000)`);
+  check(sp.includes('STATIC DOCTRINE BEGIN'), 'system prompt carries the rendered STATIC DOCTRINE block');
 }
 
 check(mitchellHits.length === 0, `no Mitchell/Lava references (${mitchellHits.join(', ') || 'clean'})`);

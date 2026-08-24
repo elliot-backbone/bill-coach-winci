@@ -61,20 +61,27 @@ const orientation = await (async () => {
   try { return JSON.parse(text); } catch { return {}; }
 })();
 
-check(typeof orientation.conduct === 'string' && orientation.conduct.length > 400,
-  'conduct is carried in the start_coach result', String(orientation.conduct).slice(0, 120));
-check(/ORDER OF OPERATIONS/.test(orientation.conduct ?? ''), 'it states what-before-how');
-check(/REASON WITH/.test(orientation.conduct ?? ''), 'it frames the principles as reasoning requirements, not tests');
-check(/NEVER FLATTER/.test(orientation.conduct ?? ''), 'it carries the anti-sycophancy requirement');
-check(/CALIBRATED CONFIDENCE/.test(orientation.conduct ?? ''), 'it carries the honest-confidence requirement');
-check(/ASK BEFORE ASSERTING/.test(orientation.conduct ?? ''), 'it carries the ask-before-asserting requirement');
-check(typeof orientation.panel_review === 'string' && orientation.panel_review.length > 800,
-  'the panel review is carried too', String(orientation.panel_review).slice(0, 120));
+// 1.13.2: the static doctrine (conduct, panel review, principal, commands, doctrine
+// binding) moved from the start_coach result to the system prompt's rendered STATIC
+// DOCTRINE block (~13.8 KB off every round-trip). The same substance checks now run
+// against the file the model actually reads, and the result must carry the pointer.
+const doctrineText = fs.readFileSync(path.join(pkg, 'plugin', 'coach', 'system-prompt.md'), 'utf8');
+check(typeof orientation.static_doctrine === 'string' && /system prompt/.test(orientation.static_doctrine),
+  'start_coach points at the system-prompt static doctrine', String(orientation.static_doctrine).slice(0, 120));
+check(orientation.conduct === undefined && orientation.panel_review === undefined,
+  'start_coach no longer re-ships the static doctrine');
+check(/STATIC DOCTRINE BEGIN/.test(doctrineText), 'the system prompt carries the rendered block');
+check(/ORDER OF OPERATIONS/.test(doctrineText), 'it states what-before-how');
+check(/REASON WITH/.test(doctrineText), 'it frames the principles as reasoning requirements, not tests');
+check(/NEVER FLATTER/.test(doctrineText), 'it carries the anti-sycophancy requirement');
+check(/CALIBRATED CONFIDENCE/.test(doctrineText), 'it carries the honest-confidence requirement');
+check(/ASK BEFORE ASSERTING/.test(doctrineText), 'it carries the ask-before-asserting requirement');
+check(/PANEL REVIEW/.test(doctrineText), 'the panel review is carried too');
 for (const level of ['LEVEL ONE', 'LEVEL TWO', 'LEVEL THREE']) {
-  check((orientation.panel_review ?? '').includes(level), `the panel has ${level.toLowerCase()}`);
+  check(doctrineText.includes(level), `the panel has ${level.toLowerCase()}`);
 }
-check(/veto/.test(orientation.panel_review ?? ''), 'level three holds a veto');
-check(/onboarding-exemplars/.test(orientation.panel_review ?? ''), 'the approved voice is named as the reference register');
+check(/veto/.test(doctrineText), 'level three holds a veto');
+check(/onboarding-exemplars/.test(doctrineText), 'the approved voice is named as the reference register');
 
 // ---------------------------------------------------------------- reference authorities
 console.log('\n== the authorities the panel reasons against are present ==');

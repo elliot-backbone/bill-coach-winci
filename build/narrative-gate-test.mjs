@@ -60,6 +60,19 @@ function stop(file) {
 const GATE = 'mcp__bill-coach__review_draft';
 
 // ---- 1. the gate ----------------------------------------------------------
+// The unclosed-work guard is LIVE since 1.13.2 (previously dead code: use-after-close
+// threw on every call). These fixtures test the NARRATIVE guards; satisfy the learning
+// rule up front so an unrelated live guard cannot block the cases below.
+{
+  const seedDb = new DatabaseSync(path.join(DATA, 'state', 'coach.sqlite'));
+  seedDb.exec('PRAGMA busy_timeout = 10000');
+  const nowSeed = new Date().toISOString();
+  seedDb.prepare(`INSERT OR REPLACE INTO learnings (id, category, learning, evidence, source_kind, source_id, fed_into_json, occurred_at, created_at)
+                  VALUES ('learn-narr-fixture', 'process', 'fixture learning satisfying the unclosed-work guard', 'fixture', 'session', 'sess-fixture', '[]', ?, ?)`)
+    .run(nowSeed, nowSeed);
+  seedDb.close();
+}
+
 console.log('the coverage gate');
 let r = stop(transcript('Do the tight five.', DRAFT, [GATE]));
 ok(r.decision === 'block' && /before the interview has happened/.test(r.reason ?? ''),

@@ -8,10 +8,11 @@
 // The real install goes to the runner's own home (the route Bill uses); wrong cases use sandbox homes.
 // Suite output is written to <work-dir>/logs, never to the console.
 
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Ledger, fingerprint, firstLine, header, identityOf, installerRun, isWindows, mcpProbe, pathsFor, ps, psFileHash, run, sha256File, sha256Text, hashTree, tallyLines, verdictFile, writeJson, withDb, pathWith, findLauncher, nowIso, sidecarsUnder } from './lib.mjs';
+import { Ledger, fingerprint, firstLine, header, identityOf, installerRun, isWindows, mcpProbe, pathsFor, ps, psFileHash, readUserPath, setUserPath, run, sha256File, sha256Text, hashTree, tallyLines, verdictFile, writeJson, withDb, pathWith, findLauncher, nowIso, sidecarsUnder } from './lib.mjs';
 
 const argv = process.argv.slice(2);
 const [repo, evidenceDir, work] = argv;
@@ -63,7 +64,8 @@ writeJson(path.join(evidenceDir, 'windows-fingerprint.json'), { ...header(TASK, 
 
 // ---------------------------------------------------------------- 3. install through the route Bill uses
 const { P, binDir, EXPECTED_TOOLS, m } = await pathsFor(pkg, HOME);
-const originalUserPath = isWindows ? ps(`[Environment]::GetEnvironmentVariable('Path','User')`).stdout.trimEnd() : null;
+const originalUserPath = readUserPath();
+const originalEntries = originalUserPath ? originalUserPath.split(';').filter(Boolean) : [];
 const smoke = { ...header(TASK, identity), home: HOME, package: pkg, steps: {}, suites: {}, logsSha256: {} };
 const inst = installerRun(pkg, 'install.mjs', { home: HOME });
 smoke.steps.install = { line: inst.line, status: inst.status, durationMs: inst.durationMs };
@@ -103,15 +105,28 @@ L.check(Boolean(launcher.shim), `launcher written (${launcher.shim})`);
 if (launcher.shim && isWindows) {
   const shimText = fs.readFileSync(launcher.shim, 'utf8');
   L.check(/^@echo off/m.test(shimText) && /%~dp0coach\.mjs/.test(shimText), 'coach.cmd is a cmd shim referencing its sibling coach.mjs');
-  const userPath = ps(`[Environment]::GetEnvironmentVariable('Path','User')`).stdout.trimEnd();
-  smoke.steps.userPath = { before: originalUserPath.length, after: userPath.length, containsBinDir: userPath.toLowerCase().split(';').includes(launcher.binDir.toLowerCase()) };
-  L.check(smoke.steps.userPath.containsBinDir, 'launcher dir persisted on the USER PATH (registry)');
+  const userPath = readUserPath();
+  const entries = userPath.split(';').filter(Boolean);
+  const normalised = (p) => path.resolve(p.replace(/\\{2,}/g, '\\')).toLowerCase();
+  const exactEntry = entries.includes(launcher.binDir);
+  const normalisedEntry = entries.some((e) => normalised(e) === normalised(launcher.binDir));
+  const preserved = originalEntries.every((e) => entries.includes(e));
+  const corrupted = originalEntries.filter((e) => !entries.includes(e)).map((e) => ({ before: e, after: entries.find((x) => normalised(x) === normalised(e)) ?? null }));
+  smoke.steps.userPath = { before: originalUserPath.length, after: userPath.length, exactEntry, normalisedEntry, preExistingEntriesPreserved: preserved, corruptedEntries: corrupted.slice(0, 10), newEntryAsStored: entries.find((e) => normalised(e) === normalised(launcher.binDir)) ?? null };
+  L.check(normalisedEntry, 'launcher dir persisted on the USER PATH (registry), normalised comparison');
+  L.check(exactEntry, `launcher dir stored EXACTLY as the installer's path (stored: ${smoke.steps.userPath.newEntryAsStored})`);
+  L.check(preserved, `pre-existing USER PATH entries preserved byte-for-byte by the installer (${corrupted.length} altered)`, corrupted.slice(0, 2).map((c) => `${c.before} -> ${c.after}`).join(' | '));
   L.check(userPath.length >= originalUserPath.length, `user PATH not truncated (${originalUserPath.length} -> ${userPath.length})`);
   const fresh = ps(`$env:PATH = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User'); (Get-Command coach -ErrorAction SilentlyContinue).Source`);
   smoke.steps.freshProcessResolvesCoach = fresh.stdout.trim();
   L.check(Boolean(fresh.stdout.trim()), `a fresh process resolves 'coach' (${fresh.stdout.trim()})`);
   const emptyHome = path.join(work, 'empty-home'); fs.mkdirSync(emptyHome, { recursive: true });
-  const probe = run('cmd.exe', ['/c', `set "BILL_COACH_HOME=${emptyHome}" && set "PATH=${launcher.binDir};%PATH%" && coach 2>&1`], { timeoutMs: 60000 });
+  const probe = (() => {
+    const started = Date.now();
+    const line = `cmd.exe /d /s /c "set "BILL_COACH_HOME=${emptyHome}" && set "PATH=${launcher.binDir};%PATH%" && coach 2>&1"`;
+    const r = spawnSync(line, { shell: false, windowsVerbatimArguments: true, encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...process.env, BILL_COACH_HOME: emptyHome, PATH: `${launcher.binDir};${process.env.PATH}` } });
+    return { cmd: line, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', durationMs: Date.now() - started };
+  })();
   smoke.steps.shimExecution = { status: probe.status, line: firstLine(probe.stdout + probe.stderr) };
   L.check(/not found at/.test(probe.stdout + probe.stderr) && /bill-coach:/.test(probe.stdout + probe.stderr), 'cmd.exe -> coach.cmd -> node -> launcher reached the launcher gate', smoke.steps.shimExecution.line);
 } else if (launcher.shim) {
@@ -137,13 +152,13 @@ for (const [name, args, banner] of suites) {
   const r = run(process.execPath, [script, ...args], { cwd: build, timeoutMs: 900000, env: HOME !== os.homedir() ? { BILL_COACH_HOME: HOME } : {} });
   smoke.logsSha256[name] = saveLog(name, r);
   const passed = r.status === 0 && r.stdout.includes(banner);
-  smoke.suites[name] = { status: r.status, passed, banner, tally: tallyLines(r.stdout).slice(-60), durationMs: r.durationMs };
+  smoke.suites[name] = { status: r.status, signal: r.signal, timedOut: r.timedOut, passed, banner, bannerPrinted: r.stdout.includes(banner), tally: tallyLines(r.stdout).slice(-60), stderrTail: r.stderr.split(/\r?\n/).filter(Boolean).slice(-25), stdoutTail: r.stdout.split(/\r?\n/).filter(Boolean).slice(-8), durationMs: r.durationMs };
   L.check(passed, `${name}: ${banner}`, tallyLines(r.stdout).filter((l) => /FAIL/.test(l)).join('; ').slice(0, 300));
 }
 // platform fixtures (registered T-DET-010/011 companions), on Windows for real
 const fixtures = run(process.execPath, [path.join(repo, 'estate/testing/run-platform-fixtures.mjs'), pkg], { cwd: repo, timeoutMs: 600000 });
 smoke.logsSha256['platform-fixtures'] = saveLog('platform-fixtures', fixtures);
-smoke.suites['platform-fixtures'] = { status: fixtures.status, passed: fixtures.status === 0 && /PLATFORM FIXTURES PASSED/.test(fixtures.stdout), tally: tallyLines(fixtures.stdout).slice(-40) };
+smoke.suites['platform-fixtures'] = { status: fixtures.status, passed: fixtures.status === 0 && /PLATFORM FIXTURES PASSED/.test(fixtures.stdout), tally: tallyLines(fixtures.stdout).slice(-40), stderrTail: fixtures.stderr.split(/\r?\n/).filter(Boolean).slice(-25), stdoutTail: fixtures.stdout.split(/\r?\n/).filter(Boolean).slice(-8) };
 L.check(smoke.suites['platform-fixtures'].passed, 'run-platform-fixtures: PLATFORM FIXTURES PASSED', fixtures.stderr.slice(0, 300));
 
 // idempotent
@@ -252,18 +267,20 @@ if (isWindows) {
   const h = sandbox('longpath');
   const pad = Array.from({ length: 30 }, (_, i) => `C:\\acceptance-pad\\dir-${String(i).padStart(2, '0')}-${'x'.repeat(24)}`).join(';');
   const longPath = `${originalUserPath};${pad}`;
-  ps(`[Environment]::SetEnvironmentVariable('Path', ${JSON.stringify(longPath).replace(/"/g, "'")}, 'User')`);
-  const before = ps(`([Environment]::GetEnvironmentVariable('Path','User')).Length`).stdout.trim();
+  setUserPath(longPath);
+  const before = readUserPath().length;
   const r = installerRun(pkg, 'install.mjs', { home: h, extraEnv: sandboxEnv(h) });
-  const afterLen = ps(`([Environment]::GetEnvironmentVariable('Path','User')).Length`).stdout.trim();
-  const afterPath = ps(`[Environment]::GetEnvironmentVariable('Path','User')`).stdout.trimEnd();
+  const afterPath = readUserPath();
+  const afterLen = afterPath.length;
   const sandBin = path.join(h, 'AppData', 'Local', 'Programs', 'bill-coach', 'bin');
-  const ok = Number(afterLen) > 1024 && Number(afterLen) >= Number(before) && afterPath.toLowerCase().includes(sandBin.toLowerCase()) && afterPath.includes('dir-29');
+  const ok = Number(afterLen) > 1024 && Number(afterLen) >= Number(before) && afterPath.toLowerCase().replace(/\\{2,}/g, '\\').includes(sandBin.toLowerCase()) && afterPath.includes('dir-29');
+  const padPreserved = pad.split(';').every((e) => afterPath.split(';').includes(e));
   installerRun(pkg, 'uninstall.mjs', { home: h, extraEnv: sandboxEnv(h) });
-  ps(`[Environment]::SetEnvironmentVariable('Path', ${JSON.stringify(originalUserPath).replace(/"/g, "'")}, 'User')`);
-  const restored = ps(`[Environment]::GetEnvironmentVariable('Path','User')`).stdout.trimEnd() === originalUserPath;
-  wrong.cases.push({ id: 'path-truncation', injected: `user PATH extended to ${before} chars (> 1024) before install`, observed: { install: r.line, lengthBefore: Number(before), lengthAfter: Number(afterLen), tailPreserved: afterPath.includes('dir-29'), restoredOriginal: restored }, refused: ok, verdict: ok ? 'NOT_TRUNCATED_AS_REQUIRED' : 'TRUNCATED' });
-  L.check(ok, `wrong case: >1024-char user PATH preserved by the installer (${before} -> ${afterLen})`);
+  setUserPath(originalUserPath);
+  const restored = readUserPath() === originalUserPath;
+  wrong.cases.push({ id: 'path-truncation', injected: `user PATH extended to ${before} chars (> 1024) before install`, observed: { install: r.line, lengthBefore: Number(before), lengthAfter: Number(afterLen), tailPreserved: afterPath.includes('dir-29'), padEntriesPreservedByteExact: padPreserved, restoredOriginal: restored }, refused: ok, verdict: ok ? 'NOT_TRUNCATED_AS_REQUIRED' : 'TRUNCATED' });
+  L.check(ok, `wrong case: >1024-char user PATH not truncated by the installer (${before} -> ${afterLen})`);
+  L.check(padPreserved, 'wrong case: pre-existing entries of the long PATH preserved byte-exact by the installer');
   L.check(restored, 'original user PATH restored after the wrong case');
 } else {
   wrong.cases.push({ id: 'path-truncation', notExercised: 'requires windows user PATH registry', verdict: 'NOT_EXERCISED' });

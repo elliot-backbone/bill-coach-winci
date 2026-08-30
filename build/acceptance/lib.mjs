@@ -81,6 +81,22 @@ export function psFileHash(file) {
   return null;
 }
 
+/** Read the persisted USER PATH exactly as stored (Windows only). */
+export function readUserPath() {
+  if (!isWindows) return null;
+  const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "[Console]::Out.Write([Environment]::GetEnvironmentVariable('Path','User'))"], { timeoutMs: 60000 });
+  return r.stdout ?? '';
+}
+/** Set the persisted USER PATH byte-exactly, passing the value through a file so no shell quoting touches it. */
+export function setUserPath(value) {
+  if (!isWindows) return false;
+  const f = path.join(os.tmpdir(), `user-path-${process.pid}-${Date.now()}.txt`);
+  fs.writeFileSync(f, value, 'utf8');
+  const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Environment]::SetEnvironmentVariable('Path', [IO.File]::ReadAllText('${f.replace(/'/g, "''")}'), 'User')`], { timeoutMs: 60000 });
+  fs.rmSync(f, { force: true });
+  return r.status === 0;
+}
+
 /** PowerShell, Windows only. Returns the run() record. */
 export function ps(script, opts = {}) {
   if (!isWindows) return { status: null, stdout: '', stderr: 'not windows', notExercised: 'requires windows' };

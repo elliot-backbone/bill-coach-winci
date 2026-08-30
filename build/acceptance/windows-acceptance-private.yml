@@ -7,6 +7,9 @@
 # and every attempt recorded here binds to it. Adapters come from the public CI repository at a pinned
 # commit and live under RUNNER_TEMP, never in the checkout (untracked files would change the identity).
 #
+# Diagnostic continuation: T-WIN-003..005 run even when an earlier task is non-PASS (the packet permits
+# Windows-native reproduction evidence without advancing maturity); dependencies are enforced by the
+# harness aggregate, not by skipping evidence gathering.
 # Logs of the real-package suites go to files under RUNNER_TEMP and are never printed or uploaded;
 # the evidence carries their tallies and hashes. The executor job records each attempt; a separate
 # evaluator job with a different actor identity evaluates them.
@@ -136,7 +139,7 @@ jobs:
 
       - name: T-WIN-003 client attachment through the installed route
         id: t003
-        if: steps.t002.outcome == 'success'
+        if: always() && steps.preflight.outcome == 'success'
         shell: pwsh
         run: |
           node "$env:ADAPTERS\t-win-003.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-003" "$env:WORKROOT\w3" --pkg "$env:WORKROOT\w2\coach\package"
@@ -144,7 +147,7 @@ jobs:
 
       - name: T-WIN-004 upgrade, migration, rollback and recovery
         id: t004
-        if: steps.t002.outcome == 'success'
+        if: always() && steps.preflight.outcome == 'success'
         shell: pwsh
         run: |
           node "$env:ADAPTERS\t-win-004.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-004" "$env:WORKROOT\w4" --pkg "$env:WORKROOT\w2\coach\package"
@@ -152,7 +155,7 @@ jobs:
 
       - name: T-WIN-005 honest uninstall, written-state reactivation and repair
         id: t005
-        if: steps.t004.outcome == 'success'
+        if: always() && steps.preflight.outcome == 'success' && steps.t004.outcome != 'skipped'
         shell: pwsh
         run: |
           node "$env:ADAPTERS\t-win-005.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-005" "$env:WORKROOT\w5" --pkg "$env:WORKROOT\w2\coach\package"

@@ -67,6 +67,8 @@ const { P, binDir, EXPECTED_TOOLS, m } = await pathsFor(pkg, HOME);
 const originalUserPath = readUserPath();
 const originalEntries = originalUserPath ? originalUserPath.split(';').filter(Boolean) : [];
 const smoke = { ...header(TASK, identity), home: HOME, package: pkg, steps: {}, suites: {}, logsSha256: {} };
+// A fresh install is the contract: any pre-existing profile in this home is purged first and recorded.
+if (fs.existsSync(P.marker) || fs.existsSync(P.profile)) { const purge = installerRun(pkg, 'uninstall.mjs', { home: HOME, args: ['--purge-data', '--confirm', 'delete bill coach memory'] }); smoke.steps.preExistingInstallPurged = purge.line; }
 const inst = installerRun(pkg, 'install.mjs', { home: HOME });
 smoke.steps.install = { line: inst.line, status: inst.status, durationMs: inst.durationMs };
 L.check(inst.line === 'installed', `installer printed "installed" (${inst.line})`, inst.stderr.slice(0, 300));

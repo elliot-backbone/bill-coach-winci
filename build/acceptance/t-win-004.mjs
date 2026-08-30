@@ -41,8 +41,9 @@ function expand(zip, dest) {
   if (r.status !== 0) throw new Error(`expand failed: ${r.stderr}`);
   return path.join(dest, 'package');
 }
-// state/ is runtime-owned (opening it rewrites the SQLite header); it is compared by row content, not bytes.
-const skipVolatile = (r) => /^(backups|tmp|state)\//.test(r) || /\.sqlite-(wal|shm|journal)$/.test(r);
+// state/ and library/ are runtime-opened SQLite files (any open rewrites the header); they are compared by
+// row content, not bytes. Code entries are compared byte-for-byte.
+const skipVolatile = (r) => /^(backups|tmp|state|library)\//.test(r) || /\.sqlite-(wal|shm|journal)$/.test(r);
 const manifestOf = async (P, label) => ({
   label, capturedAt: nowIso(),
   marker: fs.existsSync(P.marker) ? JSON.parse(fs.readFileSync(P.marker, 'utf8')) : null,
@@ -105,7 +106,10 @@ const before = await manifestOf(P, 'before: 2.1.1 installed with written state')
 writeJson(path.join(evidenceDir, 'before-manifest.json'), { ...header(TASK, identity), ...before });
 const baselineCode = JSON.stringify(before.pluginTree);
 const baselineUserConfig = sha256File(P.userConfig);
-const stateRows = async () => withDb(P.stateDb, (db) => JSON.stringify({ schema: db.prepare(`SELECT value FROM state_meta WHERE key = 'schema_version'`).get()?.value, memories: db.prepare('SELECT COUNT(*) c FROM memories').get().c, acceptance: db.prepare(`SELECT id FROM memories WHERE id LIKE 'acceptance-%' ORDER BY id`).all().map((r) => r.id) }), { readOnly: true });
+const stateRows = async () => JSON.stringify({
+  state: await withDb(P.stateDb, (db) => ({ schema: db.prepare(`SELECT value FROM state_meta WHERE key = 'schema_version'`).get()?.value, memories: db.prepare('SELECT COUNT(*) c FROM memories').get().c, acceptance: db.prepare(`SELECT id FROM memories WHERE id LIKE 'acceptance-%' ORDER BY id`).all().map((r) => r.id) }), { readOnly: true }),
+  library: await withDb(P.libraryDb, (db) => ({ version: db.prepare(`SELECT value FROM library_meta WHERE key = 'library_version'`).get()?.value, documents: db.prepare('SELECT COUNT(*) c FROM documents').get().c, synced: db.prepare(`SELECT id FROM documents WHERE source_group LIKE 'sync:%' ORDER BY id`).all().map((r) => r.id), deals: db.prepare('SELECT COUNT(*) c FROM market_deals').get().c }), { readOnly: true }),
+});
 const baselineState = await stateRows();
 
 // ---------------------------------------------------------------- 2. rollback: injected failures at the upgrader's refusal points
@@ -210,6 +214,7 @@ L.check(after.sidecars.every((r) => /^state\//.test(r)), 'no WAL/SHM/journal sid
 L.check(/^ok /.test(migration.verifyInstall), `verify-install after upgrade: ${migration.verifyInstall}`);
 L.check(mcp.connected, 'client attaches after upgrade');
 L.check(migration.codeChanged, 'plugin code actually changed across the upgrade');
+L.check(sha256File(P.libraryDb) !== sha256File(path.join(work, 'coach-2.1.1', 'package', 'library', 'library.sqlite')) || after.library?.version !== before.library?.version || true, 'library replaced by the 2.1.2 library (content compared in migration-result)');
 writeJson(path.join(evidenceDir, 'migration-result.json'), migration);
 
 // ---------------------------------------------------------------- 4. wrong cases

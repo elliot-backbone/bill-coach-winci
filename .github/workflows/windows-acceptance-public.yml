@@ -29,13 +29,17 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     env:
-      EVIDENCE: ${{ runner.temp }}\evidence\T-WIN-001
-      WORK: ${{ runner.temp }}\work
       ZIP: ${{ github.event.inputs.zip }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+
+      - name: Paths outside the checkout
+        shell: pwsh
+        run: |
+          "EVIDENCE=$env:RUNNER_TEMP\evidence\T-WIN-001" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WORK=$env:RUNNER_TEMP\work" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:

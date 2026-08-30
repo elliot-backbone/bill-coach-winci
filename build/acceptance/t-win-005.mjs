@@ -115,8 +115,8 @@ const purge = uninstall(['--purge-data', '--confirm', 'delete bill coach memory'
 // Scoped to THIS profile's plugin dir so unrelated coach processes on a shared host are not counted.
 const needle = P.pluginDir.replace(/\\/g, '\\\\');
 const procScan = isWindows
-  ? ps(`@(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*${P.pluginDir.replace(/'/g, "''")}*' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`).stdout.trim()
-  : run('sh', ['-c', `ps -axo pid,command | grep -F '${P.pluginDir}' | grep -v grep || true`]).stdout.trim();
+  ? ps(`@(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.Name -notmatch '^(powershell|pwsh|cmd)\\.exe$' -and $_.CommandLine -and $_.CommandLine -like '*${P.pluginDir.replace(/'/g, "''")}*' } | Select-Object ProcessId,Name,CommandLine) | ConvertTo-Json -Compress`).stdout.trim()
+  : run('sh', ['-c', `ps -axo pid,command | grep -F '${P.pluginDir}' | grep -vE 'grep|/bin/sh -c' || true`]).stdout.trim();
 const residual = {
   ...header(TASK, identity), purge: purge.line,
   profileDirGone: !fs.existsSync(P.profile), launcherGone: !(launcher.shim && fs.existsSync(launcher.shim)), binDirEntries: listDir(launcher.binDir),

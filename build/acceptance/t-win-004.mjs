@@ -210,7 +210,7 @@ L.check(migration.preserved.billCoachRefreshed, 'bill-coach registration refresh
 L.check(migration.preserved.syncedLibraryDocMergedForward, 'runtime-synced library document merged forward into the replaced library');
 L.check(Boolean(backupFile) && backupHasWalRow && backupJournal === 'delete', `pre-upgrade backup is standalone and carries the WAL-resident row (${migration.backup.file})`);
 L.check(after.marker?.version === '2.1.2' && String(after.state?.schemaVersion) === '11', 'marker 2.1.2, state schema 11');
-L.check(after.sidecars.every((r) => /^state\//.test(r)), 'no WAL/SHM/journal sidecars outside the runtime-owned state/ dir (state WAL files are normal for a live WAL-mode database)', after.sidecars.join(', '));
+L.check(after.sidecars.every((r) => /^state[\\/]/.test(r)), 'no WAL/SHM/journal sidecars outside the runtime-owned state/ dir (state WAL files are normal for a live WAL-mode database)', after.sidecars.join(', '));
 L.check(/^ok /.test(migration.verifyInstall), `verify-install after upgrade: ${migration.verifyInstall}`);
 L.check(mcp.connected, 'client attaches after upgrade');
 L.check(migration.codeChanged, 'plugin code actually changed across the upgrade');

@@ -125,11 +125,11 @@ if (launcher.shim && isWindows) {
   const emptyHome = path.join(work, 'empty-home'); fs.mkdirSync(emptyHome, { recursive: true });
   const probe = (() => {
     const started = Date.now();
-    const line = `cmd.exe /d /s /c "set "BILL_COACH_HOME=${emptyHome}" && set "PATH=${launcher.binDir};%PATH%" && coach 2>&1"`;
-    const r = spawnSync(line, { shell: false, windowsVerbatimArguments: true, encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...process.env, BILL_COACH_HOME: emptyHome, PATH: `${launcher.binDir};${process.env.PATH}` } });
-    return { cmd: line, status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', durationMs: Date.now() - started };
+    const inner = `set "BILL_COACH_HOME=${emptyHome}" && set "PATH=${launcher.binDir};%PATH%" && coach 2>&1`;
+    const r = spawnSync('cmd.exe', ['/d', '/s', '/c', `"${inner}"`], { windowsVerbatimArguments: true, encoding: 'utf8', timeout: 60000, windowsHide: true, env: { ...process.env, BILL_COACH_HOME: emptyHome, PATH: `${launcher.binDir};${process.env.PATH}` } });
+    return { cmd: `cmd.exe /d /s /c "${inner}"`, status: r.status, error: r.error ? String(r.error.message) : null, stdout: r.stdout ?? '', stderr: r.stderr ?? '', durationMs: Date.now() - started };
   })();
-  smoke.steps.shimExecution = { status: probe.status, line: firstLine(probe.stdout + probe.stderr) };
+  smoke.steps.shimExecution = { status: probe.status, error: probe.error, line: firstLine(probe.stdout + probe.stderr), cmd: probe.cmd };
   L.check(/not found at/.test(probe.stdout + probe.stderr) && /bill-coach:/.test(probe.stdout + probe.stderr), 'cmd.exe -> coach.cmd -> node -> launcher reached the launcher gate', smoke.steps.shimExecution.line);
 } else if (launcher.shim) {
   const probe = run(launcher.shim, [], { env: { BILL_COACH_HOME: path.join(work, 'empty-home-x'), PATH: pathWith(launcher.binDir) }, timeoutMs: 60000 });

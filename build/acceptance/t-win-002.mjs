@@ -11,7 +11,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Ledger, fingerprint, firstLine, header, identityOf, installerRun, isWindows, mcpProbe, pathsFor, ps, run, sha256File, sha256Text, hashTree, tallyLines, verdictFile, writeJson, withDb, pathWith, findLauncher, nowIso, sidecarsUnder } from './lib.mjs';
+import { Ledger, fingerprint, firstLine, header, identityOf, installerRun, isWindows, mcpProbe, pathsFor, ps, psFileHash, run, sha256File, sha256Text, hashTree, tallyLines, verdictFile, writeJson, withDb, pathWith, findLauncher, nowIso, sidecarsUnder } from './lib.mjs';
 
 const argv = process.argv.slice(2);
 const [repo, evidenceDir, work] = argv;
@@ -38,7 +38,7 @@ function expand(zip, dest) {
 
 // ---------------------------------------------------------------- 1. source and VM SHA
 const vmSha = sha256File(archive);
-const psSha = isWindows ? ps(`(Get-FileHash -LiteralPath '${archive}' -Algorithm SHA256).Hash.ToLowerInvariant()`, { timeoutMs: 120000 }).stdout.trim() : null;
+const psSha = psFileHash(archive);
 const pkg = expand(archive, path.join(work, 'coach'));
 const manifest = JSON.parse(fs.readFileSync(path.join(pkg, 'manifest.json'), 'utf8'));
 const integrity = run(process.execPath, [path.join(build, 'manifest-integrity-test.mjs'), pkg], { timeoutMs: 300000 });

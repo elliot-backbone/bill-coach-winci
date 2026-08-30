@@ -6,7 +6,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { Ledger, claudeIdentity, fingerprint, identityOf, isWindows, nodeIdentity, run, sha256File, sidecarsUnder, writeJson, nowIso } from './lib.mjs';
+import { Ledger, claudeIdentity, fingerprint, identityOf, isWindows, nodeIdentity, psFileHash, run, sha256File, sidecarsUnder, writeJson, nowIso } from './lib.mjs';
 
 const argv = process.argv.slice(2);
 const [repo, evidenceRoot] = argv;
@@ -43,9 +43,9 @@ L.check(archiveSha === rel.archiveSha256, 'archive SHA-256 equals registry relea
 if (expect.archive) L.check(archiveSha === expect.archive, 'archive SHA-256 equals expected handover value', archiveSha);
 L.check(sidecar === `${rel.archiveSha256}  ${rel.archive}\n`, 'checksum sidecar is exact shasum form');
 if (isWindows) {
-  const gh = run('powershell.exe', ['-NoProfile', '-Command', `(Get-FileHash -LiteralPath '${archive}' -Algorithm SHA256).Hash.ToLowerInvariant()`], { timeoutMs: 120000 });
-  out.steps.archive.getFileHash = gh.stdout.trim();
-  L.check(gh.stdout.trim() === archiveSha, 'PowerShell Get-FileHash agrees with node hash');
+  const gh = psFileHash(archive);
+  out.steps.archive.getFileHash = gh;
+  L.check(gh === archiveSha, `PowerShell Get-FileHash agrees with node hash (${gh})`);
 }
 
 // 3. node + claude

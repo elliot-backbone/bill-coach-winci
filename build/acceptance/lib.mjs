@@ -69,6 +69,18 @@ export function tallyLines(s) {
   return String(s ?? '').split(/\r?\n/).filter((l) => /^\s*(ok|FAIL)\s/.test(l) || /(PASSED|FAILED|ERROR)/.test(l)).map((l) => l.trimEnd());
 }
 
+/** SHA-256 via PowerShell Get-FileHash (pwsh first, then Windows PowerShell). Returns lowercase hex or null. */
+export function psFileHash(file) {
+  if (!isWindows) return null;
+  const script = `(Get-FileHash -LiteralPath '${file.replace(/'/g, "''")}' -Algorithm SHA256).Hash`;
+  for (const shell of ['pwsh.exe', 'powershell.exe']) {
+    const r = run(shell, ['-NoProfile', '-NonInteractive', '-Command', script], { timeoutMs: 180000 });
+    const m = (r.stdout || '').match(/[0-9A-Fa-f]{64}/);
+    if (m) return m[0].toLowerCase();
+  }
+  return null;
+}
+
 /** PowerShell, Windows only. Returns the run() record. */
 export function ps(script, opts = {}) {
   if (!isWindows) return { status: null, stdout: '', stderr: 'not windows', notExercised: 'requires windows' };

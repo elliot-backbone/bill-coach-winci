@@ -14,11 +14,14 @@
 name: windows-acceptance-private
 
 on:
+  push:
+    branches: ['acceptance/**']
   workflow_dispatch:
     inputs:
       adapters_ref:
         description: 'Commit in elliot-backbone/bill-coach-winci carrying build/acceptance/*'
         required: true
+        default: 'd2864884d0b44bf3b627a6661e129ba8718e2100'
       basis:
         description: 'Git basis commit of the worktree candidate'
         required: true
@@ -38,6 +41,16 @@ on:
 
 permissions:
   contents: read
+
+# A push to an acceptance branch IS the run (dispatch-only workflows cannot be registered without the
+# file existing on the default branch, which this acceptance work must not touch). Inputs fall back
+# to the pinned values below.
+env:
+  ADAPTERS_REF: ${{ github.event.inputs.adapters_ref || 'd2864884d0b44bf3b627a6661e129ba8718e2100' }}
+  BASIS: ${{ github.event.inputs.basis || 'b6b3eb8e26ffd3aabac026dacc8bd95f945e1ff6' }}
+  EXPECTED_IDENTITY: ${{ github.event.inputs.expected_identity || '5af4c516018979db5f1d64c0a2c83953c30c9a43c8f42b19a904c12d3839f209' }}
+  EXPECTED_ARCHIVE: ${{ github.event.inputs.expected_archive || '384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18' }}
+  EXPECTED_PLAN: ${{ github.event.inputs.expected_plan || '9a4e588e7fac4f702123454d0b37537eb7a3378831bd7e1a8dbb06cb7c66668d' }}
 
 concurrency:
   group: windows-acceptance-private
@@ -73,7 +86,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Remove-Item -Force '.github\workflows\windows-acceptance-private.yml'
-          git reset --mixed '${{ github.event.inputs.basis }}'
+          git reset --mixed $env:BASIS
           if ($LASTEXITCODE -ne 0) { throw 'reset to basis failed' }
           git status --short --branch
           git rev-parse HEAD
@@ -83,7 +96,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           git clone --quiet https://github.com/elliot-backbone/bill-coach-winci.git "$env:RUNNER_TEMP\winci"
-          git -C "$env:RUNNER_TEMP\winci" checkout --quiet '${{ github.event.inputs.adapters_ref }}'
+          git -C "$env:RUNNER_TEMP\winci" checkout --quiet $env:ADAPTERS_REF
           git -C "$env:RUNNER_TEMP\winci" rev-parse HEAD
           Get-ChildItem $env:ADAPTERS | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
 
@@ -111,7 +124,7 @@ jobs:
         id: preflight
         shell: pwsh
         run: |
-          node "$env:ADAPTERS\preflight.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE" --expect-identity '${{ github.event.inputs.expected_identity }}' --expect-archive '${{ github.event.inputs.expected_archive }}' --expect-plan '${{ github.event.inputs.expected_plan }}' --basis '${{ github.event.inputs.basis }}'
+          node "$env:ADAPTERS\preflight.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE" --expect-identity $env:EXPECTED_IDENTITY --expect-archive $env:EXPECTED_ARCHIVE --expect-plan $env:EXPECTED_PLAN --basis $env:BASIS
           if ($LASTEXITCODE -ne 0) { throw 'PREFLIGHT STALE_OR_FAIL: identity differs; evidence preserved, stopping' }
 
       - name: T-WIN-002 exact real archive install and native smoke
@@ -204,7 +217,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Remove-Item -Force '.github\workflows\windows-acceptance-private.yml'
-          git reset --mixed '${{ github.event.inputs.basis }}'
+          git reset --mixed $env:BASIS
           git status --short --branch
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4

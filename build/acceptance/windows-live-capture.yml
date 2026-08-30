@@ -1,0 +1,217 @@
+# windows-live-capture — one LANE of the central test protocol (DESIGN-CENTRAL-TEST-PROTOCOL-V1).
+#
+# PROVISION: reproduce the exact candidate identity, fetch the adapters at a pinned commit, install the
+# REAL package into the runner's own profile (the route Bill uses), verify. ANNOUNCE: open a tmate
+# session locked to the dispatching actor's SSH key and hold. SIGN-IN: the controller relays the
+# login URL to the operator over tmate; this job merely WAITS until the sealed profile is signed in
+# (polling `claude auth status`), never touching a credential. EXECUTE: the lane manifest, one process
+# per unit, one process per turn, everything written as it happens. COLLECT: hash and upload the whole
+# lane directory (evidence, receipts, turns, MCP traffic, debug logs, state snapshots) as PRIVATE
+# artifacts. RELEASE: sign out, purge the install, restore the user PATH, destroy the runner.
+#
+# This file deletes itself from the working tree before identity reproduction, like the acceptance
+# workflow, so the harness computes the same target identity as the source Mac.
+
+name: windows-live-capture
+
+on:
+  # The push trigger exists ONLY so GitHub registers this dispatch-driven workflow on a non-default
+  # branch; a push-triggered run has no manifest and exits at the first step in seconds.
+  push:
+    branches: ['acceptance/**']
+    paths: ['.github/workflows/windows-live-capture.yml']
+  workflow_dispatch:
+    inputs:
+      lane_manifest:
+        description: 'Lane manifest JSON (from shard-plan.mjs)'
+        required: true
+      adapters_ref:
+        description: 'Commit in elliot-backbone/bill-coach-winci carrying build/acceptance/lane/*'
+        required: true
+      minutes:
+        description: 'Max minutes to wait for sign-in'
+        required: true
+        default: '45'
+      cap_turns:
+        description: 'Turn cap for this lane'
+        required: true
+        default: '220'
+      basis:
+        description: 'Git basis commit of the worktree candidate'
+        required: true
+        default: 'b6b3eb8e26ffd3aabac026dacc8bd95f945e1ff6'
+      expected_identity:
+        description: 'Expected target identity digest'
+        required: true
+        default: '5af4c516018979db5f1d64c0a2c83953c30c9a43c8f42b19a904c12d3839f209'
+
+permissions:
+  contents: read
+
+jobs:
+  lane:
+    name: lane
+    runs-on: windows-latest
+    timeout-minutes: 300
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Paths outside the checkout
+        shell: pwsh
+        run: |
+          "ADAPTERS=$env:RUNNER_TEMP\winci\build\acceptance" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "LANE=$env:RUNNER_TEMP\lane" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "WORKROOT=$env:RUNNER_TEMP\acceptance" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "PROFILE=$env:USERPROFILE\.claude-bill-career-coach" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "KEEP=$env:RUNNER_TEMP\keep-open" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Byte-exact checkout settings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reproduce the source worktree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Force '.github\workflows\windows-live-capture.yml'
+          if (Test-Path '.github\workflows\windows-acceptance-private.yml') { Remove-Item -Force '.github\workflows\windows-acceptance-private.yml' }
+          git reset --mixed '${{ github.event.inputs.basis }}'
+          git status --short --branch
+
+      - name: Fetch adapters (public CI repo, pinned)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --quiet https://github.com/elliot-backbone/bill-coach-winci.git "$env:RUNNER_TEMP\winci"
+          git -C "$env:RUNNER_TEMP\winci" checkout --quiet '${{ github.event.inputs.adapters_ref }}'
+          New-Item -ItemType Directory -Path $env:LANE, $env:WORKROOT -Force | Out-Null
+          Set-Content -Path "$env:LANE\manifest.json" -Value '${{ github.event.inputs.lane_manifest }}' -Encoding utf8
+          git -C "$env:RUNNER_TEMP\winci" rev-parse HEAD | Set-Content -Path "$env:LANE\adapters_ref.txt"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          check-latest: false
+
+      - name: Install Claude Code and capture versions
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          [Environment]::GetEnvironmentVariable('Path','User') | Set-Content -Path "$env:RUNNER_TEMP\original-user-path.txt" -NoNewline
+
+      - name: PROVISION — identity, install the real package, verify
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node "$env:ADAPTERS\preflight.mjs" "$env:GITHUB_WORKSPACE" "$env:LANE" --expect-identity '${{ github.event.inputs.expected_identity }}' --basis '${{ github.event.inputs.basis }}'
+          if ($LASTEXITCODE -ne 0) { throw 'PREFLIGHT STALE_OR_FAIL: identity differs; lane refused' }
+          New-Item -ItemType Directory -Path "$env:WORKROOT\pkg" -Force | Out-Null
+          tar -xf "$env:GITHUB_WORKSPACE\Bill-Jennings-Coach--2.1.2.zip" -C "$env:WORKROOT\pkg"
+          Push-Location "$env:WORKROOT\pkg\package"
+          $said = (& node install\install.mjs 2>$null | Out-String).Trim()
+          Pop-Location
+          if ($said -ne 'installed') { throw "install failed: $said" }
+          $userPath = [Environment]::GetEnvironmentVariable('Path','User')
+          $env:PATH = "$userPath;$env:PATH"
+          $verify = (& node "$env:WORKROOT\pkg\package\install\verify-install.mjs" 2>&1 | Out-String).Trim()
+          if ($verify -notmatch '^ok') { throw "verify-install: $verify" }
+          $env:CLAUDE_CONFIG_DIR = $env:PROFILE
+          $mcp = (& claude mcp list 2>&1 | Out-String)
+          if ($mcp -notmatch 'bill-coach.*(Connected|√|✔)') { throw 'client did not attach the installed server' }
+          $prov = [ordered]@{ schema='bill-coach.lane-provision/v1'; lane=(Get-Content "$env:LANE\manifest.json" | ConvertFrom-Json).lane; runId=$env:GITHUB_RUN_ID; runAttempt=$env:GITHUB_RUN_ATTEMPT; adaptersRef=(Get-Content "$env:LANE\adapters_ref.txt").Trim(); identity='${{ github.event.inputs.expected_identity }}'; archive='384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18'; image=$env:ImageOS; imageVersion=$env:ImageVersion; node=(node --version); claude=((claude --version) | Out-String).Trim(); installer=$said; verify=$verify; provisionedAt=(Get-Date).ToUniversalTime().ToString('o') }
+          $prov | ConvertTo-Json -Depth 4 | Set-Content -Path "$env:LANE\provision.json" -Encoding utf8
+          "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CLAUDE_CONFIG_DIR=$env:PROFILE" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: ANNOUNCE — tmate session locked to the actor
+        id: tmate
+        uses: mxschmitt/action-tmate@v3
+        with:
+          limit-access-to-actor: true
+          detached: true
+
+      - name: Publish the connection string (private artifact + summary)
+        shell: bash
+        env:
+          TMATE_SSH_COMMAND: ${{ steps.tmate.outputs.ssh-command }}
+        run: |
+          printf '%s\n' "$TMATE_SSH_COMMAND" > "$RUNNER_TEMP/tmate-ssh.txt"
+          echo "::notice title=Lane $(jq -r .lane "$RUNNER_TEMP/lane/manifest.json") SSH::$TMATE_SSH_COMMAND"
+          { echo "### Lane connect"; echo '```'; echo "$TMATE_SSH_COMMAND"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lane-ssh-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/tmate-ssh.txt
+          retention-days: 1
+
+      - name: SIGN-IN — wait for the sealed profile to be signed in (never touches a credential)
+        shell: pwsh
+        run: |
+          New-Item -ItemType File -Path $env:KEEP -Force | Out-Null
+          $deadline = (Get-Date).AddMinutes([int]'${{ github.event.inputs.minutes }}')
+          $ok = $false
+          while ((Get-Date) -lt $deadline -and (Test-Path $env:KEEP)) {
+            $st = (& claude auth status --json 2>$null | Out-String)
+            if ($st -match '"loggedIn"\s*:\s*true' -or $st -match '"authenticated"\s*:\s*true' -or $st -match '"status"\s*:\s*"(logged_in|authenticated)"') { $ok = $true; break }
+            Start-Sleep -Seconds 10
+          }
+          $receipt = [ordered]@{ schema='bill-coach.lane-signin/v1'; verified=$ok; at=(Get-Date).ToUniversalTime().ToString('o'); method='operator browser approval relayed over tmate; status polled via claude auth status'; statusRedacted=(($st -replace '"(token|accessToken|refreshToken|key|apiKey)"\s*:\s*"[^"]*"','"$1":"<redacted>"') | Out-String).Trim() }
+          $receipt | ConvertTo-Json -Depth 3 | Set-Content -Path "$env:LANE\sign-in.json" -Encoding utf8
+          if (-not $ok) { throw 'sign-in not observed before the deadline; lane released without executing' }
+
+      - name: EXECUTE — the lane manifest, one process per unit, one per turn
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\lane\lane-runner.mjs" "$env:LANE\manifest.json" "$env:LANE" --profile "$env:PROFILE" --package "$env:WORKROOT\pkg\package" --cap '${{ github.event.inputs.cap_turns }}'
+          Write-Host "lane-runner exit $LASTEXITCODE"
+
+      - name: EXECUTE — census over this lane's captures (bounds pre-declared)
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:LANE\captures") {
+            New-Item -ItemType Directory -Path "$env:LANE\evidence\T-QUAL-002" -Force | Out-Null
+            node "$env:ADAPTERS\lane\predeclare-bounds.mjs" "$env:LANE\evidence\T-QUAL-002\bounds-predeclared.json"
+            node "$env:ADAPTERS\lane\quality-census.mjs" "$env:WORKROOT\pkg\package" "$env:LANE\captures" "$env:LANE\evidence\T-QUAL-002\census.json"
+            Write-Host "census exit $LASTEXITCODE"
+          } else { Write-Host 'no captures produced' }
+
+      - name: COLLECT — manifest of everything, then release the runner
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path $env:LANE -Recurse -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), ($_.FullName.Substring($env:LANE.Length + 1) -replace '\\','/') } | Set-Content -Path "$env:RUNNER_TEMP\capture-manifest.sha256"
+          Copy-Item "$env:RUNNER_TEMP\capture-manifest.sha256" "$env:LANE\capture-manifest.sha256"
+          Remove-Item -Force $env:KEEP -ErrorAction SilentlyContinue
+          $logout = (& claude auth logout 2>&1 | Out-String).Trim()
+          $credFiles = @(Get-ChildItem -Path $env:PROFILE -Filter '*credentials*' -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName)
+          foreach ($f in $credFiles) { Remove-Item -Force $f -ErrorAction SilentlyContinue }
+          $rel = [ordered]@{ schema='bill-coach.lane-release/v1'; logout=$logout; credentialFilesRemoved=$credFiles.Count; at=(Get-Date).ToUniversalTime().ToString('o') }
+          $rel | ConvertTo-Json | Set-Content -Path "$env:LANE\release.json" -Encoding utf8
+
+      - name: Upload the lane (private artifact — evidence, receipts, turns, MCP traffic, debug logs, state snapshots)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lane-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lane
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: RELEASE — leave nothing behind
+        if: always()
+        shell: pwsh
+        run: |
+          $pkg = "$env:WORKROOT\pkg\package"
+          if (Test-Path "$pkg\install\uninstall.mjs") { Push-Location $pkg; & node install\uninstall.mjs --purge-data --confirm 'delete bill coach memory' 2>$null; Pop-Location }
+          Remove-Item -Recurse -Force $env:PROFILE -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\bill-coach" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $env:WORKROOT -ErrorAction SilentlyContinue
+          if (Test-Path "$env:RUNNER_TEMP\original-user-path.txt") { [Environment]::SetEnvironmentVariable('Path', (Get-Content "$env:RUNNER_TEMP\original-user-path.txt" -Raw), 'User') }
+          Write-Host 'lane released'

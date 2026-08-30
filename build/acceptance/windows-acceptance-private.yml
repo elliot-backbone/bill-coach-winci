@@ -1,0 +1,233 @@
+# T-WIN-002..005 — the exact Bill Jennings Coach 2.1.2 worktree candidate on a real Windows runner.
+#
+# This file is committed on an acceptance branch of the PRIVATE repository alongside a snapshot of the
+# source Mac's worktree. The first substantive step deletes this file from the working tree and runs
+# `git reset --mixed <basis>` so HEAD, `git status` and the untracked set reproduce the source
+# worktree byte-for-byte: the harness then computes the SAME target identity digest the packet pins,
+# and every attempt recorded here binds to it. Adapters come from the public CI repository at a pinned
+# commit and live under RUNNER_TEMP, never in the checkout (untracked files would change the identity).
+#
+# Logs of the real-package suites go to files under RUNNER_TEMP and are never printed or uploaded;
+# the evidence carries their tallies and hashes. The executor job records each attempt; a separate
+# evaluator job with a different actor identity evaluates them.
+
+name: windows-acceptance-private
+
+on:
+  workflow_dispatch:
+    inputs:
+      adapters_ref:
+        description: 'Commit in elliot-backbone/bill-coach-winci carrying build/acceptance/*'
+        required: true
+      basis:
+        description: 'Git basis commit of the worktree candidate'
+        required: true
+        default: 'b6b3eb8e26ffd3aabac026dacc8bd95f945e1ff6'
+      expected_identity:
+        description: 'Expected target identity digest (handover packet)'
+        required: true
+        default: '5af4c516018979db5f1d64c0a2c83953c30c9a43c8f42b19a904c12d3839f209'
+      expected_archive:
+        description: 'Expected archive SHA-256'
+        required: true
+        default: '384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18'
+      expected_plan:
+        description: 'Expected semantic plan hash'
+        required: true
+        default: '9a4e588e7fac4f702123454d0b37537eb7a3378831bd7e1a8dbb06cb7c66668d'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-acceptance-private
+  cancel-in-progress: false
+
+env:
+  ADAPTERS: ${{ runner.temp }}\winci\build\acceptance
+  EVIDENCE: ${{ runner.temp }}\evidence
+  RUN_DIR: ${{ runner.temp }}\run
+  WORKROOT: ${{ runner.temp }}\acceptance
+
+jobs:
+  execute:
+    name: Execute T-WIN-002..005 on the exact candidate
+    runs-on: windows-latest
+    timeout-minutes: 170
+    outputs:
+      preflight: ${{ steps.preflight.outcome }}
+    steps:
+      - name: Byte-exact checkout settings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reproduce the source worktree (HEAD = basis, changes unstaged, candidate files untracked)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Force '.github\workflows\windows-acceptance-private.yml'
+          git reset --mixed '${{ github.event.inputs.basis }}'
+          if ($LASTEXITCODE -ne 0) { throw 'reset to basis failed' }
+          git status --short --branch
+          git rev-parse HEAD
+
+      - name: Fetch the adapters from the public CI repository at the pinned commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone --quiet https://github.com/elliot-backbone/bill-coach-winci.git "$env:RUNNER_TEMP\winci"
+          git -C "$env:RUNNER_TEMP\winci" checkout --quiet '${{ github.event.inputs.adapters_ref }}'
+          git -C "$env:RUNNER_TEMP\winci" rev-parse HEAD
+          Get-ChildItem $env:ADAPTERS | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          check-latest: false
+
+      - name: Install Claude Code (readable version only; no minimum floor)
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+          node --version
+          $PSVersionTable.PSVersion.ToString()
+          [Environment]::OSVersion.VersionString
+
+      - name: Capture the original user PATH
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path $env:EVIDENCE, $env:RUN_DIR, $env:WORKROOT -Force | Out-Null
+          [Environment]::GetEnvironmentVariable('Path','User') | Set-Content -Path "$env:RUNNER_TEMP\original-user-path.txt" -NoNewline
+
+      - name: Preflight — exact identity or stop
+        id: preflight
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\preflight.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE" --expect-identity '${{ github.event.inputs.expected_identity }}' --expect-archive '${{ github.event.inputs.expected_archive }}' --expect-plan '${{ github.event.inputs.expected_plan }}' --basis '${{ github.event.inputs.basis }}'
+          if ($LASTEXITCODE -ne 0) { throw 'PREFLIGHT STALE_OR_FAIL: identity differs; evidence preserved, stopping' }
+
+      - name: T-WIN-002 exact real archive install and native smoke
+        id: t002
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\t-win-002.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-002" "$env:WORKROOT\w2"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::T-WIN-002 recorded a non-PASS verdict' }
+
+      - name: T-WIN-003 client attachment through the installed route
+        id: t003
+        if: steps.t002.outcome == 'success'
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\t-win-003.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-003" "$env:WORKROOT\w3" --pkg "$env:WORKROOT\w2\coach\package"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::T-WIN-003 recorded a non-PASS verdict' }
+
+      - name: T-WIN-004 upgrade, migration, rollback and recovery
+        id: t004
+        if: steps.t002.outcome == 'success'
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\t-win-004.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-004" "$env:WORKROOT\w4" --pkg "$env:WORKROOT\w2\coach\package"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::T-WIN-004 recorded a non-PASS verdict' }
+
+      - name: T-WIN-005 honest uninstall, written-state reactivation and repair
+        id: t005
+        if: steps.t004.outcome == 'success'
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\t-win-005.mjs" "$env:GITHUB_WORKSPACE" "$env:EVIDENCE\T-WIN-005" "$env:WORKROOT\w5" --pkg "$env:WORKROOT\w2\coach\package"
+          if ($LASTEXITCODE -ne 0) { Write-Host '::warning::T-WIN-005 recorded a non-PASS verdict' }
+
+      - name: Record every attempt through the candidate harness (executor identity)
+        if: always() && steps.preflight.outcome == 'success'
+        shell: pwsh
+        run: |
+          node "$env:ADAPTERS\ingest.mjs" "$env:GITHUB_WORKSPACE" "$env:RUN_DIR" "$env:EVIDENCE" "windows-executor-${{ github.run_id }}-${{ github.run_attempt }}" T-WIN-002 T-WIN-003 T-WIN-004 T-WIN-005
+          Get-Content "$env:RUN_DIR\ingest-report.json"
+
+      - name: Upload evidence and recorded attempts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}\evidence
+            ${{ runner.temp }}\run
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Leave nothing behind
+        if: always()
+        shell: pwsh
+        run: |
+          $pkg = "$env:WORKROOT\w2\coach\package"
+          if (Test-Path "$pkg\install\uninstall.mjs") { Push-Location $pkg; & node install\uninstall.mjs --purge-data --confirm 'delete bill coach memory' 2>$null; Pop-Location }
+          Remove-Item -Recurse -Force "$env:USERPROFILE\.claude-bill-career-coach" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:LOCALAPPDATA\Programs\bill-coach" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "$env:WORKROOT" -ErrorAction SilentlyContinue
+          if (Test-Path "$env:RUNNER_TEMP\original-user-path.txt") { [Environment]::SetEnvironmentVariable('Path', (Get-Content "$env:RUNNER_TEMP\original-user-path.txt" -Raw), 'User') }
+          Write-Host 'install, package copies and sandboxes removed; user PATH restored'
+
+  evaluate:
+    name: Independently evaluate (evaluator identity)
+    needs: execute
+    if: always() && needs.execute.result != 'cancelled' && needs.execute.outputs.preflight == 'success'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Byte-exact checkout settings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Reproduce the source worktree
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Force '.github\workflows\windows-acceptance-private.yml'
+          git reset --mixed '${{ github.event.inputs.basis }}'
+          git status --short --branch
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          check-latest: false
+
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: windows-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}
+
+      - name: Evaluate each recorded attempt with a distinct actor
+        shell: pwsh
+        run: |
+          $report = [ordered]@{ schema = 'bill-coach.windows-evaluation/v1'; evaluator = "windows-evaluator-${{ github.run_id }}-${{ github.run_attempt }}"; tasks = [ordered]@{} }
+          foreach ($t in @('T-WIN-002','T-WIN-003','T-WIN-004','T-WIN-005')) {
+            if (-not (Test-Path "$env:RUN_DIR\tasks\$t")) { $report.tasks[$t] = @{ verdict = 'NOT_RECORDED' }; continue }
+            $out = (& node estate\testing\acceptance.mjs evaluate --run-dir "$env:RUN_DIR" --task $t --actor "windows-evaluator-${{ github.run_id }}-${{ github.run_attempt }}-$t" 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            Write-Host "$t exit $code"
+            Write-Host $out
+            $report.tasks[$t] = @{ exit = $code; output = $out.Trim() }
+          }
+          & node estate\testing\acceptance.mjs aggregate --run-dir "$env:RUN_DIR" --level S2_WINDOWS_VERIFIED 2>&1 | Tee-Object -FilePath "$env:RUN_DIR\aggregate-S2-on-windows-runner.json"
+          Write-Host "aggregate exit $LASTEXITCODE (3 = not satisfied: T-BASIS-001/T-DET-012 attempts live in the source evidence directory, not this run-dir)"
+          $report | ConvertTo-Json -Depth 6 | Set-Content -Path "$env:RUN_DIR\windows-evaluation.json" -Encoding utf8
+
+      - name: Upload evaluated run
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-acceptance-evaluated-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\run
+          if-no-files-found: error
+          retention-days: 30

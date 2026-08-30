@@ -1,0 +1,169 @@
+# T-WIN-001 — Public scrub-first privacy gate on the scrubbed 2.1.2 package.
+#
+# Acceptance adapter `github-actions` (venue github-windows) for the Bill Jennings Coach 2.1.2
+# candidate. THIS REPOSITORY IS PUBLIC and carries only the scrubbed test package. The scrub check
+# is the FIRST substantive package step and runs before any install; the wrong case seeds one
+# synthetic sentinel from each of the seven sensitive families into its own copy and proves the
+# same checker trips on every family. Evidence is written outside the checkout and uploaded as the
+# only artifact; no expanded package, state or transcript is ever uploaded.
+#
+# Required evidence (registry T-WIN-001): workflow-identity.json, scrub-result.json,
+# wrong-case-result.json, cleanup-result.json.
+
+name: windows-acceptance-public
+
+on:
+  workflow_dispatch:
+    inputs:
+      zip:
+        description: 'Scrubbed package zip in this repo'
+        required: true
+        default: 'test-package.zip'
+
+permissions:
+  contents: read
+
+jobs:
+  t-win-001:
+    name: T-WIN-001 public scrub-first privacy gate
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      EVIDENCE: ${{ runner.temp }}\evidence\T-WIN-001
+      WORK: ${{ runner.temp }}\work
+      ZIP: ${{ github.event.inputs.zip }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          check-latest: false
+
+      - name: Install Claude Code (version must be readable; no minimum floor is compared)
+        shell: pwsh
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          claude --version
+
+      - name: Workflow identity (written before any package step)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path $env:EVIDENCE -Force | Out-Null
+          New-Item -ItemType Directory -Path $env:WORK -Force | Out-Null
+          $claudeCmd = (Get-Command claude).Source
+          $identity = [ordered]@{
+            schema = 'bill-coach.acceptance-evidence/T-WIN-001/v1'
+            taskId = 'T-WIN-001'
+            adapter = 'github-actions'
+            venue = 'github-windows'
+            capturedAt = (Get-Date).ToUniversalTime().ToString('o')
+            repository = $env:GITHUB_REPOSITORY
+            repositoryVisibility = 'public'
+            ref = $env:GITHUB_REF
+            sha = $env:GITHUB_SHA
+            runId = $env:GITHUB_RUN_ID
+            runAttempt = $env:GITHUB_RUN_ATTEMPT
+            job = $env:GITHUB_JOB
+            workflow = $env:GITHUB_WORKFLOW
+            runnerImage = $env:ImageOS
+            runnerImageVersion = $env:ImageVersion
+            os = [Environment]::OSVersion.VersionString
+            powershell = $PSVersionTable.PSVersion.ToString()
+            node = @{ path = (Get-Command node).Source; version = (node --version); sha256 = (Get-FileHash (Get-Command node).Source -Algorithm SHA256).Hash.ToLowerInvariant() }
+            claude = @{ path = $claudeCmd; version = ((claude --version) | Out-String).Trim(); sha256 = (Get-FileHash $claudeCmd -Algorithm SHA256).Hash.ToLowerInvariant(); minimumFloorCompared = $false }
+            scrubbedPackage = @{ path = $env:ZIP; sha256 = (Get-FileHash $env:ZIP -Algorithm SHA256).Hash.ToLowerInvariant(); size = (Get-Item $env:ZIP).Length }
+            scrubCheck = @{ path = 'build/scrub-check.mjs'; sha256 = (Get-FileHash 'build/scrub-check.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() }
+            sentinelSeeder = @{ path = 'build/acceptance/seed-sentinels.mjs'; sha256 = (Get-FileHash 'build/acceptance/seed-sentinels.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() }
+            wrongCaseRunner = @{ path = 'build/acceptance/run-scrub-wrong-cases.mjs'; sha256 = (Get-FileHash 'build/acceptance/run-scrub-wrong-cases.mjs' -Algorithm SHA256).Hash.ToLowerInvariant() }
+            executedPathOrder = @('workflow-identity', 'scrub-check (first package step)', 'sentinel wrong cases', 'manifest integrity', 'scrubbed install + client attach', 'cleanup', 'upload evidence only')
+            target = @{ product = 'Bill Jennings Coach'; distribution = '2.1.2'; realArchiveSha256 = '384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18'; targetIdentityDigest = '5af4c516018979db5f1d64c0a2c83953c30c9a43c8f42b19a904c12d3839f209'; note = 'the real archive never enters this repository; identity carried for binding only' }
+          }
+          $identity | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $env:EVIDENCE 'workflow-identity.json') -Encoding utf8
+
+      # THE SCRUB CHECK RUNS FIRST. A package carrying real data fails the job here, before any install.
+      - name: Scrub-first — the package in this public repo is genuinely scrubbed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Expand-Archive -Path $env:ZIP -DestinationPath "$env:WORK\scrubcheck" -Force
+          node build\scrub-check.mjs "$env:WORK\scrubcheck\package" --json (Join-Path $env:EVIDENCE 'scrub-result.json')
+          if ($LASTEXITCODE -ne 0) { throw "THE PACKAGE IN THIS PUBLIC REPO CARRIES REAL DATA" }
+
+      - name: Wrong case — one sentinel from every sensitive family must trip the same checker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node build\acceptance\seed-sentinels.mjs "$env:WORK\scrubcheck\package" "$env:WORK\sentinels" --json "$env:WORK\sentinel-plan.json"
+          if ($LASTEXITCODE -ne 0) { throw "sentinel seeding failed" }
+          node build\acceptance\run-scrub-wrong-cases.mjs "$env:WORK\sentinel-plan.json" build\scrub-check.mjs (Join-Path $env:EVIDENCE 'wrong-case-result.json')
+          if ($LASTEXITCODE -ne 0) { throw "a sensitive family did not trip the scrub check" }
+
+      - name: Scrubbed package manifest matches every byte
+        shell: pwsh
+        run: |
+          node build\manifest-integrity-test.mjs "$env:WORK\scrubcheck\package"
+          if ($LASTEXITCODE -ne 0) { throw "the scrubbed package manifest is stale or incomplete" }
+
+      # The scrubbed package is code-identical to the real one, so the client attach gate is exercised
+      # here too. This is public-lane corroboration only; the real-package attach proof is T-WIN-003.
+      - name: Scrubbed install and Claude Code client attach (public-lane corroboration)
+        id: attach
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location "$env:WORK\scrubcheck\package"
+          $said = (& node install\install.mjs 2>$null | Out-String).Trim()
+          Pop-Location
+          $profileDir = "$env:USERPROFILE\.claude-bill-career-coach"
+          $env:CLAUDE_CONFIG_DIR = $profileDir
+          $out = (& claude mcp list 2>&1 | Out-String)
+          $connected = ($out -match 'bill-coach.*(Connected|✔)')
+          $result = [ordered]@{ schema = 'bill-coach.public-attach/v1'; installer = $said; registrationPresent = (Test-Path "$profileDir\.claude.json"); mcpListSeesServer = ($out -match 'bill-coach'); mcpListConnected = $connected; capturedAt = (Get-Date).ToUniversalTime().ToString('o') }
+          $result | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $env:EVIDENCE 'public-attach-result.json') -Encoding utf8
+          if ($said -ne 'installed') { throw "scrubbed install failed: $said" }
+          if (-not $connected) { throw "the client did not attach the scrubbed server" }
+
+      - name: Cleanup — leave nothing behind, and prove it
+        if: always()
+        shell: pwsh
+        run: |
+          $profileDir = "$env:USERPROFILE\.claude-bill-career-coach"
+          $purge = ''
+          if (Test-Path "$env:WORK\scrubcheck\package\install\uninstall.mjs") {
+            Push-Location "$env:WORK\scrubcheck\package"
+            $purge = (& node install\uninstall.mjs --purge-data --confirm 'delete bill coach memory' 2>$null | Out-String).Trim()
+            Pop-Location
+          }
+          Remove-Item -Recurse -Force "$env:WORK" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue
+          $bin = "$env:LOCALAPPDATA\Programs\bill-coach"
+          Remove-Item -Recurse -Force $bin -ErrorAction SilentlyContinue
+          $evidenceFiles = @(Get-ChildItem -Path $env:EVIDENCE -File | ForEach-Object { @{ name = $_.Name; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(); size = $_.Length } })
+          $cleanup = [ordered]@{
+            schema = 'bill-coach.acceptance-evidence/T-WIN-001/cleanup/v1'
+            taskId = 'T-WIN-001'
+            capturedAt = (Get-Date).ToUniversalTime().ToString('o')
+            purgeLine = $purge
+            workRemoved = -not (Test-Path $env:WORK)
+            profileRemoved = -not (Test-Path $profileDir)
+            launcherRemoved = -not (Test-Path $bin)
+            userPathCarriesLauncher = (([Environment]::GetEnvironmentVariable('Path','User')) -split ';' | Where-Object { $_ -like '*bill-coach*' }).Count -gt 0
+            uploadedArtifactContents = 'evidence directory only: no expanded package, state, database or transcript'
+            evidenceFiles = $evidenceFiles
+            runnerIsEphemeral = $true
+          }
+          $cleanup | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $env:EVIDENCE 'cleanup-result.json') -Encoding utf8
+          Get-Content (Join-Path $env:EVIDENCE 'cleanup-result.json')
+
+      - name: Upload evidence (the only artifact)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-T-WIN-001-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\evidence\T-WIN-001
+          if-no-files-found: error
+          retention-days: 30

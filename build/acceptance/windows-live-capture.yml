@@ -28,8 +28,12 @@ on:
       adapters_ref:
         description: 'Commit in elliot-backbone/bill-coach-winci carrying build/acceptance/lane/*'
         required: true
+      auth_mode:
+        description: 'token = CLAUDE_CODE_OAUTH_TOKEN repo secret (no relay); tmate = operator signs in over tmate'
+        required: true
+        default: 'token'
       minutes:
-        description: 'Max minutes to wait for sign-in'
+        description: 'Max minutes to wait for sign-in (tmate mode)'
         required: true
         default: '45'
       cap_turns:
@@ -128,7 +132,8 @@ jobs:
           "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
           "CLAUDE_CONFIG_DIR=$env:PROFILE" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: ANNOUNCE — tmate session locked to the actor
+      - name: ANNOUNCE — tmate session locked to the actor (tmate mode only)
+        if: ${{ github.event.inputs.auth_mode == 'tmate' }}
         id: tmate
         uses: mxschmitt/action-tmate@v3
         with:
@@ -136,6 +141,7 @@ jobs:
           detached: true
 
       - name: Publish the connection string (private artifact + summary)
+        if: ${{ github.event.inputs.auth_mode == 'tmate' }}
         shell: bash
         env:
           TMATE_SSH_COMMAND: ${{ steps.tmate.outputs.ssh-command }}
@@ -144,13 +150,29 @@ jobs:
           echo "::notice title=Lane $(jq -r .lane "$RUNNER_TEMP/lane/manifest.json") SSH::$TMATE_SSH_COMMAND"
           { echo "### Lane connect"; echo '```'; echo "$TMATE_SSH_COMMAND"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - if: ${{ github.event.inputs.auth_mode == 'tmate' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lane-ssh-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/tmate-ssh.txt
           retention-days: 1
 
-      - name: SIGN-IN — wait for the sealed profile to be signed in (never touches a credential)
+      - name: SIGN-IN — token mode: the secret reaches only the claude processes' environment (never logged)
+        if: ${{ github.event.inputs.auth_mode == 'token' }}
+        shell: pwsh
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if (-not $env:CLAUDE_CODE_OAUTH_TOKEN) { throw 'auth_mode=token but the CLAUDE_CODE_OAUTH_TOKEN secret is not set on this repository' }
+          $st = (& claude auth status --json 2>$null | Out-String)
+          $ok = ($st -match '"loggedIn"\s*:\s*true' -or $st -match '"authenticated"\s*:\s*true')
+          if (-not $ok) { $probe = (& claude -p 'reply with the single word OK' --output-format json --max-turns 1 2>&1 | Out-String); $ok = ($probe -match '"result"\s*:\s*"OK') }
+          $receipt = [ordered]@{ schema='bill-coach.lane-signin/v1'; mode='token-secret'; verified=$ok; at=(Get-Date).ToUniversalTime().ToString('o'); statusRedacted=(($st -replace '"(token|accessToken|refreshToken|key|apiKey)"\s*:\s*"[^"]*"','"$1":"<redacted>"') | Out-String).Trim() }
+          $receipt | ConvertTo-Json -Depth 3 | Set-Content -Path "$env:LANE\sign-in.json" -Encoding utf8
+          if (-not $ok) { throw 'token present but claude did not authenticate; see sign-in.json (redacted)' }
+
+      - name: SIGN-IN — tmate mode: wait for the operator's browser approval (never touches a credential)
+        if: ${{ github.event.inputs.auth_mode == 'tmate' }}
         shell: pwsh
         run: |
           New-Item -ItemType File -Path $env:KEEP -Force | Out-Null
@@ -158,15 +180,17 @@ jobs:
           $ok = $false
           while ((Get-Date) -lt $deadline -and (Test-Path $env:KEEP)) {
             $st = (& claude auth status --json 2>$null | Out-String)
-            if ($st -match '"loggedIn"\s*:\s*true' -or $st -match '"authenticated"\s*:\s*true' -or $st -match '"status"\s*:\s*"(logged_in|authenticated)"') { $ok = $true; break }
+            if ($st -match '"loggedIn"\s*:\s*true' -or $st -match '"authenticated"\s*:\s*true') { $ok = $true; break }
             Start-Sleep -Seconds 10
           }
-          $receipt = [ordered]@{ schema='bill-coach.lane-signin/v1'; verified=$ok; at=(Get-Date).ToUniversalTime().ToString('o'); method='operator browser approval relayed over tmate; status polled via claude auth status'; statusRedacted=(($st -replace '"(token|accessToken|refreshToken|key|apiKey)"\s*:\s*"[^"]*"','"$1":"<redacted>"') | Out-String).Trim() }
+          $receipt = [ordered]@{ schema='bill-coach.lane-signin/v1'; mode='operator-tmate'; verified=$ok; at=(Get-Date).ToUniversalTime().ToString('o'); statusRedacted=(($st -replace '"(token|accessToken|refreshToken|key|apiKey)"\s*:\s*"[^"]*"','"$1":"<redacted>"') | Out-String).Trim() }
           $receipt | ConvertTo-Json -Depth 3 | Set-Content -Path "$env:LANE\sign-in.json" -Encoding utf8
           if (-not $ok) { throw 'sign-in not observed before the deadline; lane released without executing' }
 
       - name: EXECUTE — the lane manifest, one process per unit, one per turn
         shell: pwsh
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ github.event.inputs.auth_mode == 'token' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
         run: |
           node "$env:ADAPTERS\lane\lane-runner.mjs" "$env:LANE\manifest.json" "$env:LANE" --profile "$env:PROFILE" --package "$env:WORKROOT\pkg\package" --cap '${{ github.event.inputs.cap_turns }}'
           Write-Host "lane-runner exit $LASTEXITCODE"

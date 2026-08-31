@@ -327,7 +327,8 @@ function evaluateChecks(card, replies, ctx) {
   });
 }
 async function runCard() {
-  const deck = JSON.parse(fs.readFileSync(path.join(HERE, 'cards-v1.json'), 'utf8'));
+  // Decks merge: every cards-*.json beside this file (v1 quality deck, v2 behavioural deck). Ids are unique across decks.
+  const deck = { cards: fs.readdirSync(HERE).filter((f) => /^cards-.*\.json$/.test(f)).sort().flatMap((f) => JSON.parse(fs.readFileSync(path.join(HERE, f), 'utf8')).cards ?? []) };
   const card = deck.cards.find((c) => c.id === unit.id);
   if (!card) { fail('CARD_SETUP', `unknown card ${unit.id}`); process.exit(1); }
   const startedAt = now();

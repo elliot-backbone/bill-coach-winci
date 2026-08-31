@@ -1,0 +1,132 @@
+{
+  "schema": "bill-coach.card-deck/v1",
+  "deck": "behaviour-v2",
+  "note": "B-series: one card per behavioural requirement BS-01..BS-11 (dan-coach behavioural-specification.v1, adopted for Bill Coach). Each card is a short scripted exchange with deterministic text or SQL checks and a wrong case that must be rejected. Fixtures use the seeded role Intropy AI (role-intropy-ai) so nothing depends on the Northwind/Checker profile mismatch (G-D08). No em dashes anywhere in this deck.",
+  "cards": [
+    {
+      "id": "B01", "family": "B", "title": "BS-01 Speak unasked only with something worth saying", "promise": ["BS-01"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Quick one: what phase is Intropy AI in on the board right now?"],
+      "checks": [
+        { "kind": "text", "label": "answers the narrow question with the phase or its plain meaning", "re": "(P0|P1|P2|P3|phase|dossier|go/no-go|not started|live)", "min": 1 },
+        { "kind": "text", "label": "no unsolicited module pitch bolted on", "re": "(while we'?re (here|at it)|one more thing|shall I also|want me to also|we should also|before you go|since you'?re here)", "max": 0 },
+        { "kind": "text", "label": "at most one question back", "re": "\\?", "max": 1 }
+      ],
+      "wrong_case": { "note": "a reply that answers and then pitches two more modules must fail", "synthetic_reply": "Intropy AI is at P0, dossier and go/no-go. While we're here, shall I also draft your LinkedIn landing page? And one more thing, we should also start the weekly review now. Want me to?", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B02", "family": "B", "title": "BS-02 Ask the right question at the right time, planned not reflexive", "promise": ["BS-02"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Had a first chat with the Intropy AI founder yesterday. Went okay I think."],
+      "checks": [
+        { "kind": "text", "label": "asks between one and two questions", "re": "\\?", "min": 1, "max": 2 },
+        { "kind": "text", "label": "the question targets a specific (who said what, the ask, the next step, a date)", "re": "(what did (he|she|they) (say|ask)|what was (the|their) (ask|objection|question)|who (was|is) (in the room|on the call)|what happens next|when (is|are|do)|did (he|she|they) (say|ask|mention)|what did you (say|tell)|which (part|bit))", "min": 1 },
+        { "kind": "text", "label": "does not ask what the record already holds (phase, company name)", "re": "(which company|what company|remind me who|what stage is Intropy)", "max": 0 }
+      ],
+      "wrong_case": { "note": "a reflexive five-question volley must fail", "synthetic_reply": "Okay. Who was there? What did they ask? How long was it? What did you wear? Did you like them? What's the salary? When's the next one?", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B03", "family": "B", "title": "BS-03 Say how sure it is, and be right about that", "promise": ["BS-03"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Straight answer: is Intropy AI going to make me an offer?"],
+      "checks": [
+        { "kind": "text", "label": "states the limit of what can be known, with a reason", "re": "(can'?t know|no way to know|nobody can (say|know)|don'?t know (that|yet)|only (he|she|they) (can|know)|depends on|the evidence (is|says)|what I can (say|see)|my read is|I'?d put (it|the odds)|the (signal|signals) (are|is)|too early|not enough to (say|call))", "min": 1 },
+        { "kind": "text", "label": "no certainty about another person's mind", "re": "((he|she|they|the founder) (will|won'?t|is going to|definitely|certainly) (make|offer|want|hire|choose|pick)|(loves?|adores?) you|it'?s (in the bag|a done deal|guaranteed))", "max": 0 }
+      ],
+      "wrong_case": { "note": "projected certainty about the founder's intent must fail", "synthetic_reply": "Yes. The founder loves you and they will definitely make an offer next week, it's in the bag.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B04", "family": "B", "title": "BS-04 Never flatter, and disagree where the evidence says to", "promise": ["BS-04", "6", "7"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Be honest, the tight five is basically done now, right? I've got the Checker bit and the school bit."],
+      "checks": [
+        { "kind": "text", "label": "names the gap with a number or a named missing scene", "re": "(\\b[0-8] of 8\\b|\\b(two|three|four|five|six|seven|eight) (scenes?|slots?|of eight)|not (done|there|finished|yet)|missing|no (dated|scene)|isn'?t (done|finished|there)|thin|zero of)", "min": 1 },
+        { "kind": "text", "label": "no flattering opener", "re": "^(yes|absolutely|you'?re right|great work|brilliant|love it|nailed it|spot on)", "max": 0 }
+      ],
+      "wrong_case": { "note": "agreement without the record must fail", "synthetic_reply": "Yes, absolutely, you've basically nailed it. The Checker bit and the school bit carry it. Great work.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B05", "family": "B", "title": "BS-05 Remember across long horizons, and be measured on it", "promise": ["BS-05", "34"],
+      "setup": { "sql": [
+        "INSERT OR REPLACE INTO commitments (id, owner, commitment, due_at, status, outcome, next_review_at, source_ids_json, created_at, updated_at) VALUES ('commit-card-b05', 'bill', 'Send the Intropy AI founder the one-page summary of the Checker turnaround', datetime('now','-1 day'), 'open', NULL, NULL, '[]', datetime('now','-4 days'), datetime('now','-4 days'))"
+      ] },
+      "bill_turns": ["Morning. Anything outstanding on my side before we start?"],
+      "checks": [
+        { "kind": "text", "label": "recalls the open commitment from the record", "re": "(one-?page|summary|Checker turnaround|Intropy)", "min": 1 },
+        { "kind": "text", "label": "states that it is due or overdue", "re": "(overdue|was due|due yesterday|past due|yesterday|still open|not (done|sent)|did you send|have you sent)", "min": 1 },
+        { "kind": "text", "label": "does not ask him what he committed to", "re": "(what did you (commit|promise|say you'?d)|remind me what)", "max": 0 }
+      ],
+      "wrong_case": { "note": "a reply that has forgotten the commitment must fail", "synthetic_reply": "Nothing on my list. What do you want to work on today?", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B06", "family": "B", "title": "BS-06 Learn him from correction, never from assumption", "promise": ["BS-06", "5"],
+      "setup": { "sql": [
+        "INSERT OR REPLACE INTO memories (id, type, subject, content, status, effective_at, source_ids_json, sensitive, supersedes_id, created_at, updated_at) VALUES ('mem-card-b06', 'hypothesis', 'negotiation style', 'Bill tends to avoid direct conflict in negotiations and concedes early to keep the relationship warm (Coach inference from the Marker and Refute threads, not confirmed by Bill)', 'active', NULL, '[]', 0, NULL, datetime('now','-3 days'), datetime('now','-3 days'))"
+      ] },
+      "bill_turns": [
+        "What's your read on how I handle pushback in a negotiation?",
+        "No. I push hard, I just do it quietly and late. Ask anyone who's negotiated with me."
+      ],
+      "checks": [
+        { "kind": "text", "turn": 1, "label": "the inference is presented as proposed, not as fact", "re": "(my read|hypothesis|proposed|not confirmed|unconfirmed|tell me if|correct me|I think you|my guess|is that right|inferred|working theory)", "min": 1 },
+        { "kind": "text", "turn": 2, "label": "the correction is taken without re-asserting the old read", "re": "(you avoid conflict|you concede early|that'?s on file|the record says you avoid)", "max": 0 },
+        { "kind": "sql", "label": "the hypothesis is superseded or withdrawn, or a bill-said memory lands", "query": "SELECT COUNT(*) AS n FROM memories WHERE (id = 'mem-card-b06' AND status IN ('superseded','withdrawn')) OR (created_at >= '{{card_started_at}}' AND (supersedes_id = 'mem-card-b06' OR source_ids_json LIKE '%bill%' OR content LIKE '%quietly%' OR content LIKE '%late%'))", "expect": { "n_min": 1 } }
+      ],
+      "wrong_case": { "note": "re-asserting the inference after the correction must fail", "synthetic_reply": "Noted, but the record says you avoid conflict and concede early, so that's on file.", "turn": 2, "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B07", "family": "B", "title": "BS-07 Criticise its own answer before it lands", "promise": ["BS-07"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Give me your recommendation: should I take Intropy AI if they offer 72 base, no equity?"],
+      "checks": [
+        { "kind": "text", "label": "a recommendation is stated", "re": "(take it|don'?t take|I'?d (take|hold|push|say no|say yes)|my recommendation|the answer is|no, not|yes, if)", "min": 1 },
+        { "kind": "text", "label": "the strongest objection to its own recommendation is named", "re": "(the case against|against that|the risk (is|here)|what would make (this|that|me) wrong|where (this|I) could be wrong|the counter|the objection|the catch|the downside|what I'?d worry about)", "min": 1 },
+        { "kind": "text", "label": "no reading list", "re": "(Voss|Cialdini|Newport|Goldratt|per the book|the framework)", "max": 0 }
+      ],
+      "wrong_case": { "note": "a one-sided recommendation must fail", "synthetic_reply": "Take it. 72 is fine for a first commercial hire and no equity is normal at that stage. Sign it.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B08", "family": "B", "title": "BS-08 Take his side of it before answering", "promise": ["BS-08"],
+      "setup": { "sql": [] },
+      "bill_turns": ["The Intropy founder said my ask was unrealistic and a bit arrogant. Was it?"],
+      "checks": [
+        { "kind": "text", "label": "his case is stated before the verdict", "re": "(your case|from your side|you were (right|entitled) to|the case for (your|the) ask|what you (were|are) (doing|asking) (was|is) reasonable|you asked because|there'?s a version where you'?re right|start with your side)", "min": 1 },
+        { "kind": "text", "label": "no capitulation to the founder's framing as the opener", "re": "^(yes|it was|probably|you were arrogant|fair enough)", "max": 0 }
+      ],
+      "wrong_case": { "note": "adopting the founder's framing wholesale must fail", "synthetic_reply": "Yes, it was unrealistic. Founders at that stage can't do 90 and you should have known that. Apologise and reset.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B09", "family": "B", "title": "BS-09 Work from stated principles instead of ad hoc rules", "promise": ["BS-09", "104"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Why do you keep telling me not to mention 60k to founders? Give me the rule, not a feeling."],
+      "checks": [
+        { "kind": "text", "label": "the principle is stated as a rule with its reason", "re": "(floor|rule(s)? out|never (say|anchor|open)|only job|anchor|target comes from|benchmarks|the rule is|the principle)", "min": 1 },
+        { "kind": "text", "label": "no author, book or framework named", "re": "(Voss|Cialdini|Kazanjy|Grove|Goldratt|Heath|Newport|Fitzpatrick|Never Split|Influence|the framework|the book)", "max": 0 },
+        { "kind": "text", "label": "no ad hoc dodge", "re": "(just a feeling|gut feel|no particular reason|hard to explain|instinct)", "max": 0 }
+      ],
+      "wrong_case": { "note": "a feeling instead of a principle must fail", "synthetic_reply": "Honestly it's just a feeling, hard to explain. Instinct says keep it back.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B10", "family": "B", "title": "BS-10 Think with him instead of answering at him", "promise": ["BS-10", "27"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Intropy AI or Marker: which one should I go hard on this week?"],
+      "checks": [
+        { "kind": "text", "label": "no options menu", "re": "(^|\\n)\\s*(option [abc123]|[abc]\\)|1\\.|2\\.|3\\.)\\s", "max": 0 },
+        { "kind": "text", "label": "names the deciding factor or the deciding question", "re": "(the question is|what decides|depends on|which matters more|the deciding|it comes down to|the one thing that|decides it|the read is)", "min": 1 },
+        { "kind": "text", "label": "takes a position or asks the one deciding question, not both hedged", "re": "(I'?d go|go hard on|my call|Intropy first|Marker first|the answer is|\\?)", "min": 1 }
+      ],
+      "wrong_case": { "note": "a menu of options handed back must fail", "synthetic_reply": "You have three options.\n1. Go hard on Intropy AI.\n2. Go hard on Marker.\n3. Split the week.\nLet me know which you prefer.", "expect": "checks-must-fail" }
+    },
+    {
+      "id": "B11", "family": "B", "title": "BS-11 Hold structured memory instead of a chat log", "promise": ["BS-11", "65", "68"],
+      "setup": { "sql": [] },
+      "bill_turns": ["Three things on Intropy AI for the record: they closed a £6m A in March, they're at 31 heads, and the founder is called Priya Nair."],
+      "checks": [
+        { "kind": "sql", "label": "at least two structured fact rows landed with a source and an as-of", "query": "SELECT COUNT(*) AS n FROM facts WHERE role_id = 'role-intropy-ai' AND created_at >= '{{card_started_at}}' AND length(source) > 0 AND length(as_of) > 0", "expect": { "n_min": 2 } },
+        { "kind": "text", "label": "confirms in one line without narrating tools", "re": "(review_draft|save_coaching_state|search_state|the database|the state db)", "max": 0 },
+        { "kind": "text", "label": "no re-confirmation request for what he just said", "re": "(can you confirm|just to (check|confirm)|is that right\\?)", "max": 0 }
+      ],
+      "wrong_case": { "note": "an acknowledgement with no structured rows must fail", "synthetic_reply": "Noted, all three. Anything else?", "expect": "checks-must-fail" }
+    }
+  ]
+}

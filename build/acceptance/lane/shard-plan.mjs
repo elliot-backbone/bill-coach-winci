@@ -25,7 +25,10 @@ const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_CO
 const turnsForModule = (m) => { const ex = EXCHANGES[m] ?? 2; return 2 + 2 * ex; }; // coach opener+demand + (bill+coach) per exchange
 
 const wantModules = opt('--modules', 'all') === 'all' ? MODULES : String(opt('--modules')).split(',');
-const deck = fs.existsSync(deckPath) ? JSON.parse(fs.readFileSync(deckPath, 'utf8')) : { cards: [] };
+const here = path.dirname(new URL(import.meta.url).pathname);
+const deck = opt('--deck', null)
+  ? JSON.parse(fs.readFileSync(deckPath, 'utf8'))
+  : { cards: fs.readdirSync(here).filter((f) => /^cards-.*\.json$/.test(f)).sort().flatMap((f) => JSON.parse(fs.readFileSync(path.join(here, f), 'utf8')).cards ?? []) };
 const wantFamilies = opt('--cards', 'all');
 const cards = wantFamilies === 'none' ? [] : deck.cards.filter((c) => wantFamilies === 'all' || String(wantFamilies).split(',').includes(c.family));
 

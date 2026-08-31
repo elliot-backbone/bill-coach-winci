@@ -157,7 +157,7 @@ jobs:
           path: ${{ runner.temp }}/tmate-ssh.txt
           retention-days: 1
 
-      - name: SIGN-IN — token mode: the secret reaches only the claude processes' environment (never logged)
+      - name: "SIGN-IN (token mode) — the secret reaches only the claude processes' environment, never logs"
         if: ${{ github.event.inputs.auth_mode == 'token' }}
         shell: pwsh
         env:
@@ -171,7 +171,7 @@ jobs:
           $receipt | ConvertTo-Json -Depth 3 | Set-Content -Path "$env:LANE\sign-in.json" -Encoding utf8
           if (-not $ok) { throw 'token present but claude did not authenticate; see sign-in.json (redacted)' }
 
-      - name: SIGN-IN — tmate mode: wait for the operator's browser approval (never touches a credential)
+      - name: "SIGN-IN (tmate mode) — wait for the operator's browser approval; never touches a credential"
         if: ${{ github.event.inputs.auth_mode == 'tmate' }}
         shell: pwsh
         run: |

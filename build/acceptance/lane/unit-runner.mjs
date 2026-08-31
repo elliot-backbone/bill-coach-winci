@@ -5,7 +5,9 @@
 //   turns/<unit>/turn-NN.prompt.txt     the prompt bytes (Bill's turn or the persona)
 //   turns/<unit>/turn-NN.stream.jsonl   Claude Code's full stream-json event log (API-level: every
 //                                       assistant event, tool_use, tool_result, usage, cost)
-//   turns/<unit>/turn-NN.reply.txt      the final reply text Bill would have seen
+//   turns/<unit>/turn-NN.reply.txt      the final attempt's reply text (what the lane records as the coach reply)
+//   turns/<unit>/turn-NN.as-read.txt    every attempt's reply text in order, joined by a blank line: what Bill
+//                                       actually read (a Stop-hook block does not hide streamed text; rc4, 2026-08-31)
 //   turns/<unit>/turn-NN.stdout / .stderr
 //   turns/<unit>/turn-NN.meta.json      exit, signal, timing, usage, model, tool calls, session id
 //   diag/mcp/<unit>-turn-NN.jsonl       every JSON-RPC line between Claude Code and server.mjs (tap)
@@ -71,6 +73,7 @@ const HINTS = {
   STATE_RESTORE: 'could not restore the pre-card state; subsequent cards may see contaminated state',
   GATE_FAILED_CLOSED: 'the emission gate held the reply after four retries; the unit refuses to accept an unverified reply (same rule as full-capture.mjs)',
   NUDGE_REPEATED: 'the gate held twice with the same reason; a repeated hold is terminal and the reply already emitted stands (recorded, not failed)',
+  SESSION_CLOSE: 'could not close the active session row(s) at unit end; the next unit may inherit an open session and the stale-episode save nudge can fire in it',
 };
 
 // ---------------------------------------------------------------- environment (mirrors launcher/coach.mjs §8)
@@ -118,9 +121,14 @@ function keepTranscript(sessionId, tag) {
   try { fs.copyFileSync(transcript, path.join(dirs.turns, `${tag}.transcript.jsonl`)); } catch (e) { append('errors.jsonl', { class: 'TRANSCRIPT_COPY', tag, message: e.message }); }
   return transcript;
 }
+// AS-READ (measured 2026-08-31, rc4): in Claude Code a Stop-hook block does not hide the text the model already
+// streamed; the model continues and appends a corrected reply, so what Bill reads is the concatenation of every
+// attempt. `reply` stays the final attempt (what the lane has always recorded); `replyAsRead` is every attempt's
+// text in order, and `attemptCount` how many there were.
 function coachTurn({ prompt, cwd, cont, label }) {
   let r = claudeTurn({ lane: 'coach', prompt, cwd, cont, label });
   const holds = [];
+  const attempts = [{ tag: r.meta?.tag ?? null, reply: r.reply ?? '' }];
   let previousReason = null;
   for (let attempt = 0; r.ok; attempt += 1) {
     const transcript = keepTranscript(r.meta.sessionId, r.meta.tag);
@@ -140,10 +148,14 @@ function coachTurn({ prompt, cwd, cont, label }) {
     holds.push({ attempt, reason: g.block.slice(0, 400) });
     if (attempt >= MAX_GATE_RETRIES) { r = { ...r, ok: false, gateFailedClosed: true }; fail('GATE_FAILED_CLOSED', `held after ${MAX_GATE_RETRIES} retries`, { tag: r.meta.tag, lastReason: g.block.slice(0, 300) }); break; }
     r = claudeTurn({ lane: 'coach', prompt: `${GATE_RETRY_MARKER}\n${g.block}`, cwd, cont: true, label: `${label}-after-gate-${attempt + 1}` });
+    attempts.push({ tag: r.meta?.tag ?? null, reply: r.reply ?? '' });
   }
   if (!r.ok && r.meta?.sessionId) keepTranscript(r.meta.sessionId, r.meta.tag);
   r.holds = holds;
-  fs.writeFileSync(path.join(dirs.turns, `${r.meta.tag}.gate.json`), JSON.stringify({ label, holds, finalTag: r.meta.tag, gateFailedClosed: Boolean(r.gateFailedClosed) }, null, 2));
+  r.replyAsRead = attempts.map((a) => a.reply).filter(Boolean).join('\n\n');
+  r.attemptCount = attempts.length;
+  fs.writeFileSync(path.join(dirs.turns, `${r.meta.tag}.as-read.txt`), r.replyAsRead);
+  fs.writeFileSync(path.join(dirs.turns, `${r.meta.tag}.gate.json`), JSON.stringify({ label, holds, finalTag: r.meta.tag, attempts: attempts.map((a) => a.tag), attemptCount: r.attemptCount, asReadSha256: sha(r.replyAsRead), asReadBytes: Buffer.byteLength(r.replyAsRead), gateFailedClosed: Boolean(r.gateFailedClosed) }, null, 2));
   return r;
 }
 
@@ -173,6 +185,30 @@ function rowDelta(beforeFile, afterFile) {
   }
   b.close(); a.close();
   return out;
+}
+// SESSION CLOSE AT UNIT END. In production one sitting is one session: the launcher opens it and it is closed when
+// Bill leaves. The lane runs many units against one state DB with no launcher between them, so the session row
+// unit N opened is still 'active' when unit N+1 starts; twenty minutes past its last checkpoint the product's
+// stale-episode save nudge fires inside unit N+1, and the model's answer to the nudge replaces the coaching reply
+// in the capture. Closing every active row at unit end keeps each unit one session, as production has it.
+// Only columns that exist are set (PRAGMA first): status and updated_at always do, closed_at may not.
+function closeActiveSessions(where) {
+  let db = null;
+  try {
+    db = new DatabaseSync(STATE_DB);
+    const cols = new Set(db.prepare('PRAGMA table_info("sessions")').all().map((c) => String(c.name)));
+    if (!cols.has('status')) { const out = { where, closed: 0, note: 'sessions has no status column' }; append('receipts.jsonl', { kind: 'session-close', ...out }); return out; }
+    const active = Number(db.prepare(`SELECT COUNT(*) n FROM sessions WHERE status = 'active'`).get()?.n ?? 0);
+    if (active === 0) { const out = { where, closed: 0, at: now() }; append('receipts.jsonl', { kind: 'session-close', ...out }); return out; }
+    const ts = now();
+    const sets = ["status = 'closed'"]; const params = [];
+    if (cols.has('closed_at')) { sets.push('closed_at = COALESCE(closed_at, ?)'); params.push(ts); }
+    if (cols.has('updated_at')) { sets.push('updated_at = ?'); params.push(ts); }
+    const res = db.prepare(`UPDATE sessions SET ${sets.join(', ')} WHERE status = 'active'`).run(...params);
+    const out = { where, closed: Number(res?.changes ?? active), at: ts, columnsSet: sets.map((x) => x.split(' ')[0]) };
+    append('receipts.jsonl', { kind: 'session-close', ...out });
+    return out;
+  } catch (e) { fail('SESSION_CLOSE', e.message, { where }); return { where, error: e.message }; } finally { try { db?.close(); } catch { /* already closed */ } }
 }
 
 // ---------------------------------------------------------------- one claude turn = one process
@@ -260,23 +296,25 @@ async function runModule() {
   const profileJson = fs.existsSync(path.join(DATA, 'coach', 'principal-profile.json')) ? fs.readFileSync(path.join(DATA, 'coach', 'principal-profile.json'), 'utf8') : '{}';
   const exchanges = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12) : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 6) : Number(process.env.EXCHANGES || 2);
   let transcript = ''; const turns = [];
-  const push = (who, text, meta, holds) => { turns.push({ who, text, meta, holds }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
+  // asRead: { text, attempts } for coach turns (coachTurn's replyAsRead/attemptCount); undefined for Bill's turns.
+  const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
+  const asReadOf = (r) => ({ text: r.replyAsRead ?? r.reply ?? '', attempts: r.attemptCount ?? 1 });
   // Pushback beat: on every third exchange (i % 3 === 1) in the modules where Coach makes claims and numbers Bill
   // can dispute, the simulated Bill pushes back with no new evidence. The census measures whether Coach folds (C1).
   const PUSHBACK_MODULES = new Set(['NEGOTIATION_MODULE', 'OFFER_REVIEW', 'CV_COACHED', 'DEBRIEF_REVIEW']);
   const beatFor = (i) => (PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null);
   let r = coachTurn({ prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
-  push('bill', mod.open); push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
+  push('bill', mod.open); push('coach', r.reply, r.meta, r.holds, asReadOf(r)); if (!r.ok) return finishModule(mod, turns, false);
   for (let i = 0; i < exchanges; i += 1) {
     const beat = beatFor(i);
     const b = claudeTurn({ lane: 'bill', prompt: billPersona(transcript, mod.brief, profileJson.slice(0, 6000), beat), cwd: billCwd, label: `${mod.key}-bill-${i + 1}${beat ? `-${beat}` : ''}` });
     const billText = b.reply.trim(); if (!b.ok || !billText) { push('bill', billText || '(empty)', { ...b.meta, beat }); return finishModule(mod, turns, false); }
     push('bill', billText, { beat });
     r = coachTurn({ prompt: billText, cwd: coachCwd, cont: true, label: `${mod.key}-${String(i + 2).padStart(2, '0')}` });
-    push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
+    push('coach', r.reply, r.meta, r.holds, asReadOf(r)); if (!r.ok) return finishModule(mod, turns, false);
   }
   r = coachTurn({ prompt: mod.demand, cwd: coachCwd, cont: true, label: `${mod.key}-99-deliverable` });
-  push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds);
+  push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds, asReadOf(r));
   return finishModule(mod, turns, r.ok);
 }
 /** Dated coverage slots, read from the newest state snapshot this unit took (VACUUM INTO copies under dirs.state). */
@@ -305,9 +343,10 @@ function displayedDeliverable(mod, t) {
   return { kind: mod.key.toLowerCase(), body: t.text, ungated: true };
 }
 function finishModule(mod, turns, complete) {
+  const sessionClose = closeActiveSessions('module-end'); // one unit is one session (see closeActiveSessions)
   const wrote = {}; // new rows across the unit, from per-turn deltas
   for (const f of fs.readdirSync(dirs.state).filter((x) => x.endsWith('.delta.json')).sort()) { const d = JSON.parse(fs.readFileSync(path.join(dirs.state, f), 'utf8')) || {}; for (const [t, v] of Object.entries(d)) if (v?.newRows?.length) wrote[t] = [...(wrote[t] ?? []), ...v.newRows]; }
-  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), beat: t.meta?.beat ?? undefined, saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [displayedDeliverable(mod, t)] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: coverageSlotsDated() };
+  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, text_as_read: t.who === 'coach' ? (t.asRead?.text ?? t.text) : undefined, attempts: t.who === 'coach' ? (t.asRead?.attempts ?? 1) : undefined, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), beat: t.meta?.beat ?? undefined, saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [displayedDeliverable(mod, t)] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: coverageSlotsDated(), session_close: sessionClose };
   fs.mkdirSync(path.join(laneDir, 'captures'), { recursive: true });
   fs.writeFileSync(path.join(laneDir, 'captures', `${unitKey}.session.json`), `${JSON.stringify(session, null, 2)}\n`);
   fs.writeFileSync(path.join(dirs.turns, 'wrote.json'), `${JSON.stringify(wrote, null, 2)}\n`);
@@ -346,7 +385,7 @@ async function runCard() {
     const replies = []; let billText = '';
     for (let i = 0; i < card.bill_turns.length; i += 1) {
       const r = coachTurn({ prompt: card.bill_turns[i], cwd: coachCwd, cont: i > 0, label: `${card.id}-${i + 1}` });
-      billText += `\n${card.bill_turns[i]}`; replies.push(r.reply); out.turns.push({ bill: card.bill_turns[i], replySha256: r.meta.replySha256, ok: r.ok, cost: r.meta.totalCostUsd, tools: r.meta.toolCalls.map((t) => t.name) }); write();
+      billText += `\n${card.bill_turns[i]}`; replies.push(r.reply); out.turns.push({ bill: card.bill_turns[i], replySha256: r.meta.replySha256, ok: r.ok, cost: r.meta.totalCostUsd, tools: r.meta.toolCalls.map((t) => t.name), text_as_read: r.replyAsRead ?? r.reply ?? '', attempts: r.attemptCount ?? 1, asReadSha256: sha(r.replyAsRead ?? r.reply ?? '') }); write();
       if (!r.ok) { out.verdict = 'CAPTURE-INCOMPLETE'; write(); break; }
       if (i === card.bill_turns.length - 1) {
         const bag = stateTextBag(pre.file ?? STATE_DB);
@@ -373,8 +412,12 @@ async function runCard() {
       write();
     }
   }
+  // one unit is one session (see closeActiveSessions): close what this card opened before the restore, and again
+  // after it, since the restored pre-card state may itself carry an active session row from an earlier unit.
+  out.sessionClose = { beforeRestore: closeActiveSessions('card-end'), afterRestore: null };
+  write();
   // restore the pre-card state so cards do not contaminate each other
-  if (pre.file) { let restored = false; for (let i = 0; i < 12 && !restored; i += 1) { try { for (const s of ['-wal', '-shm']) if (fs.existsSync(STATE_DB + s)) fs.rmSync(STATE_DB + s); fs.copyFileSync(pre.file, STATE_DB); restored = true; } catch { await new Promise((res) => setTimeout(res, 500)); } } if (!restored) fail('STATE_RESTORE', 'pre-card state could not be restored'); out.stateRestored = restored; write(); }
+  if (pre.file) { let restored = false; for (let i = 0; i < 12 && !restored; i += 1) { try { for (const s of ['-wal', '-shm']) if (fs.existsSync(STATE_DB + s)) fs.rmSync(STATE_DB + s); fs.copyFileSync(pre.file, STATE_DB); restored = true; } catch { await new Promise((res) => setTimeout(res, 500)); } } if (!restored) fail('STATE_RESTORE', 'pre-card state could not be restored'); out.stateRestored = restored; if (restored) out.sessionClose.afterRestore = closeActiveSessions('card-post-restore'); write(); }
   return out.verdict === 'PASS' ? 0 : 1;
 }
 

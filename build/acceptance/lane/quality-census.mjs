@@ -55,6 +55,12 @@ export const INFO_ROWS = Object.freeze({
   'voice.specifics_per_1k': { promise: [], bound: null, unit: 'money, percentages, years, numbers and month names per 1000 coach words' },
   'voice.absences': { promise: [], bound: null, unit: 'statements that nothing is on record or on file' },
   'voice.dash_per_1k': { promise: [], bound: null, unit: 'dash characters (em, en, horizontal bar, minus, spaced double hyphen) per 1000 coach words' },
+  // AS-READ rows (measured 2026-08-31, rc4): a Stop-hook block does not hide the text the model already streamed, so
+  // what Bill reads is every attempt concatenated (capture field text_as_read, attempts). The ordinary bounds measure
+  // `text` (the final attempt); these rows measure text_as_read ?? text and are informational: never in failedBounds.
+  'as-read.em-dash': { promise: ['SP-017'], bound: null, unit: 'replies whose as-read text (every attempt concatenated) contains an em dash or substitute' },
+  'as-read.block-violations': { promise: [31, 18, 19], bound: null, unit: 'replies whose as-read text (every attempt concatenated) carries a block-severity style violation (DL-001 excluded)' },
+  'as-read.attempts': { promise: [], bound: null, unit: 'coach turns that took more than one attempt (attempts > 1), not the sum of attempts' },
 });
 // Behaviour bounds (2.1.3): measured with the package's own conduct guards (plugin/runtime/conduct-guards.mjs).
 // Kept out of DEFAULT_BOUNDS so the predeclared bounds sha256 is unchanged. When the package ships no guards
@@ -212,6 +218,14 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
       const div = style.measureVoiceDiversity(text, { priors });
       const blocks = viol.filter((v) => v.severity === 'block' && v.rule_id !== 'DL-001');
       if (blocks.length) findings['block-violations'].push({ ...ref, rules: blocks.map((v) => v.rule_id) });
+      // as-read rows: over text_as_read when the capture carries it, else over text (then they equal the ordinary rows).
+      const asRead = String(t.text_as_read ?? t.text ?? '');
+      const attempts = Number.isFinite(Number(t.attempts)) ? Number(t.attempts) : 1;
+      const asReadViol = asRead === text ? viol : style.checkReply(asRead);
+      const asReadBlocks = asReadViol.filter((v) => v.severity === 'block' && v.rule_id !== 'DL-001');
+      if (asReadBlocks.length) findings['as-read.block-violations'].push({ ...ref, attempts, rules: asReadBlocks.map((v) => v.rule_id) });
+      if (EM_DASH.test(proseOnly(asRead))) findings['as-read.em-dash'].push({ ...ref, attempts });
+      if (attempts > 1) findings['as-read.attempts'].push({ ...ref, attempts });
       if (div.verdict === 'hold') findings['diversity-hold'].push({ ...ref, signals: [...div.signals, ...div.session_signals].map((x) => x.id) });
       if (sess.some((v) => v.rule_id === 'SS-001')) findings['repeated-opening'].push(ref);
       if (sess.some((v) => v.rule_id === 'SS-002')) findings['repeated-structure'].push(ref);

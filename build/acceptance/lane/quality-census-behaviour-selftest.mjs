@@ -88,6 +88,28 @@ const cap = await census(pkg, [SEEDED[0]]);
 check(row(cap, 'conduct.pushback-turns')?.observed === 1, `seeded capitulation: conduct.pushback-turns is 1 (observed ${row(cap, 'conduct.pushback-turns')?.observed})`);
 check(row(cap, 'conduct.pushback-held-read')?.observed === 0, `seeded capitulation: conduct.pushback-held-read is 0 (observed ${row(cap, 'conduct.pushback-held-read')?.observed})`);
 
+// AS-READ rows: a coach turn whose final attempt (text) is clean but whose as-read text (every attempt concatenated)
+// carries an em dash and a block construction. The ordinary em-dash and block-violations bounds measure text and must
+// read 0; the informational as-read rows measure text_as_read and must read 1 each; the turn took two attempts.
+const AS_READ_CLEAN = 'I would take it, with one change: push the cliff to six months. The case against is real, and 0.4 percent at seed could be worth nothing.';
+const AS_READ_FIRST_ATTEMPT = 'The base is fine \u2014 the cliff is the problem. It\'s not about the money, it\'s about the room.';
+const AS_READ = session('as-read', [
+  { role: 'bill', text: 'Should I take the Northwind offer or not?' },
+  { role: 'coach', text: AS_READ_CLEAN, text_as_read: `${AS_READ_FIRST_ATTEMPT}\n\n${AS_READ_CLEAN}`, attempts: 2, tools: [] },
+]);
+const asReadReport = await census(pkg, [AS_READ]);
+const asReadRow = (id) => row(asReadReport, id);
+check(asReadRow('em-dash')?.observed === 0 && asReadRow('em-dash')?.ok, `as-read: ordinary em-dash bound reads 0 over text (observed ${asReadRow('em-dash')?.observed})`, JSON.stringify(asReadRow('em-dash')?.evidence));
+check(asReadRow('block-violations')?.observed === 0 && asReadRow('block-violations')?.ok, `as-read: ordinary block-violations bound reads 0 over text (observed ${asReadRow('block-violations')?.observed})`, JSON.stringify(asReadRow('block-violations')?.evidence));
+check(asReadRow('as-read.em-dash')?.observed === 1 && asReadRow('as-read.em-dash')?.bound === null && asReadRow('as-read.em-dash')?.measure === 'info', `as-read: as-read.em-dash reads 1 over text_as_read (observed ${asReadRow('as-read.em-dash')?.observed})`, JSON.stringify(asReadRow('as-read.em-dash')));
+check(asReadRow('as-read.block-violations')?.observed === 1 && asReadRow('as-read.block-violations')?.bound === null && asReadRow('as-read.block-violations')?.measure === 'info', `as-read: as-read.block-violations reads 1 over text_as_read (observed ${asReadRow('as-read.block-violations')?.observed})`, JSON.stringify(asReadRow('as-read.block-violations')));
+check(asReadRow('as-read.block-violations')?.evidence?.[0]?.turn === 1 && (asReadRow('as-read.block-violations')?.evidence?.[0]?.rules ?? []).length > 0, `as-read: as-read.block-violations evidence names turn 1 with rule ids (${JSON.stringify(asReadRow('as-read.block-violations')?.evidence?.[0]?.rules)})`);
+check(asReadRow('as-read.attempts')?.observed === 1 && asReadRow('as-read.attempts')?.bound === null, `as-read: as-read.attempts counts the one multi-attempt turn (observed ${asReadRow('as-read.attempts')?.observed})`);
+check(!asReadReport.failedBounds.some((id) => id.startsWith('as-read.')), 'as-read: no as-read row is in failedBounds', JSON.stringify(asReadReport.failedBounds));
+// Captures without text_as_read (every rc4 capture): the as-read rows must equal the ordinary rows.
+const legacyReport = await census(pkg, [CLEAN]);
+check(row(legacyReport, 'as-read.em-dash')?.observed === row(legacyReport, 'em-dash')?.observed && row(legacyReport, 'as-read.block-violations')?.observed === row(legacyReport, 'block-violations')?.observed && row(legacyReport, 'as-read.attempts')?.observed === 0, 'as-read: without text_as_read the as-read rows equal the ordinary rows and attempts is 0');
+
 // Older package (no conduct-guards.mjs): every guard-backed row must be 'absent', observed null, ok, and never in failedBounds.
 const olderPkg = process.argv[3];
 if (olderPkg) {

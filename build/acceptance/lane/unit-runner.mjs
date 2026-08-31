@@ -74,9 +74,13 @@ const HINTS = {
 // ---------------------------------------------------------------- environment (mirrors launcher/coach.mjs §8)
 function sealedEnv(extra = {}) {
   const env = { ...process.env, CLAUDE_CONFIG_DIR: PROFILE, CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1', CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: '1', CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_DISABLE_WORKFLOWS: '1', CLAUDE_CODE_DISABLE_CRON: '1', CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: '1', DISABLE_GROWTHBOOK: '1', CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS: '10000', CLAUDE_DISABLE_ADOPT: '1', CLAUDE_CODE_DISABLE_ARTIFACT: '1', CI: '1', ...extra };
+  // Windows: the inherited key is `Path`; a plain-object spread keeps that case, so find it case-insensitively
+  // and write back under the SAME key (a second `PATH` key would shadow it with a near-empty value).
+  const pathKey = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
   const nodeDir = path.dirname(process.execPath);
-  const entries = (env.PATH || '').split(path.delimiter);
-  if (!entries.includes(nodeDir)) env.PATH = [nodeDir, ...entries].join(path.delimiter);
+  const entries = String(env[pathKey] || '').split(path.delimiter).filter(Boolean);
+  if (!entries.includes(nodeDir)) env[pathKey] = [nodeDir, ...entries].join(path.delimiter);
+  for (const k of Object.keys(env)) if (k !== pathKey && k.toUpperCase() === 'PATH') delete env[k];
   return env;
 }
 const REDACT = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i;
@@ -124,7 +128,7 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   const env = sealedEnv({ NODE_OPTIONS: `--import ${JSON.stringify(new URL('mcp-tap.mjs', import.meta.url).href)}`.replace(/"/g, ''), MCP_TAP_LOG: mcpLog });
   const before = snapshot(`${tag}.before`);
   const debugBefore = new Set(fs.existsSync(path.join(PROFILE, 'debug')) ? fs.readdirSync(path.join(PROFILE, 'debug')) : []);
-  fs.writeFileSync(`${base}.request.json`, JSON.stringify({ schema: 'bill-coach.turn-request/v1', unitKey, tag, lane, label, cwd, argv: [CLAUDE, ...args], promptSha256: sha(prompt), promptBytes: Buffer.byteLength(prompt), envRedacted: redactedEnv({ CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR, NODE_OPTIONS: env.NODE_OPTIONS, MCP_TAP_LOG: env.MCP_TAP_LOG, PATH: env.PATH }), startedAt: now(), stateBefore: before.sha256 }, null, 2));
+  fs.writeFileSync(`${base}.request.json`, JSON.stringify({ schema: 'bill-coach.turn-request/v1', unitKey, tag, lane, label, cwd, argv: [CLAUDE, ...args], promptSha256: sha(prompt), promptBytes: Buffer.byteLength(prompt), envRedacted: redactedEnv({ CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR, NODE_OPTIONS: env.NODE_OPTIONS, MCP_TAP_LOG: env.MCP_TAP_LOG, PATH: env[Object.keys(env).find((k) => k.toUpperCase() === 'PATH')] }), startedAt: now(), stateBefore: before.sha256 }, null, 2));
   const started = Date.now();
   // Windows: claude is claude.cmd; Node refuses .cmd without a shell, and shell:true concatenates argv
   // unquoted (DEP0190). Hand cmd.exe one quoted command line, prompt via stdin (never on the command line).

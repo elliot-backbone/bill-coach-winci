@@ -124,10 +124,15 @@ jobs:
           $env:PATH = "$userPath;$env:PATH"
           $verify = (& node "$env:WORKROOT\pkg\package\install\verify-install.mjs" 2>&1 | Out-String).Trim()
           if ($verify -notmatch '^ok') { throw "verify-install: $verify" }
+          # Modules run in ORDINARY sessions, never inside onboarding: mark onboarding complete exactly as the
+          # estate's Windows smoke does before its module gates (estate/build/complete-onboarding.mjs).
+          $data = "$env:PROFILE\plugins\data\bill-career-coach-skills-dir"
+          node "$env:GITHUB_WORKSPACE\estate\build\complete-onboarding.mjs" $data "$env:WORKROOT\pkg\package"
+          if ($LASTEXITCODE -ne 0) { throw 'could not complete onboarding on the lane profile' }
           $env:CLAUDE_CONFIG_DIR = $env:PROFILE
           $mcp = (& claude mcp list 2>&1 | Out-String)
           if ($mcp -notmatch 'bill-coach.*(Connected|√|✔)') { throw 'client did not attach the installed server' }
-          $prov = [ordered]@{ schema='bill-coach.lane-provision/v1'; lane=(Get-Content "$env:LANE\manifest.json" | ConvertFrom-Json).lane; runId=$env:GITHUB_RUN_ID; runAttempt=$env:GITHUB_RUN_ATTEMPT; adaptersRef=(Get-Content "$env:LANE\adapters_ref.txt").Trim(); identity='${{ github.event.inputs.expected_identity }}'; archive='384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18'; image=$env:ImageOS; imageVersion=$env:ImageVersion; node=(node --version); claude=((claude --version) | Out-String).Trim(); installer=$said; verify=$verify; provisionedAt=(Get-Date).ToUniversalTime().ToString('o') }
+          $prov = [ordered]@{ schema='bill-coach.lane-provision/v1'; lane=(Get-Content "$env:LANE\manifest.json" | ConvertFrom-Json).lane; runId=$env:GITHUB_RUN_ID; runAttempt=$env:GITHUB_RUN_ATTEMPT; adaptersRef=(Get-Content "$env:LANE\adapters_ref.txt").Trim(); identity='${{ github.event.inputs.expected_identity }}'; archive='384aa45950f76014fbc6277b90eb78d3313138c88deb7cedc690ef71fe848b18'; image=$env:ImageOS; imageVersion=$env:ImageVersion; node=(node --version); claude=((claude --version) | Out-String).Trim(); installer=$said; verify=$verify; onboardingCompleted=$true; provisionedAt=(Get-Date).ToUniversalTime().ToString('o') }
           $prov | ConvertTo-Json -Depth 4 | Set-Content -Path "$env:LANE\provision.json" -Encoding utf8
           "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append
           "CLAUDE_CONFIG_DIR=$env:PROFILE" | Out-File -FilePath $env:GITHUB_ENV -Append

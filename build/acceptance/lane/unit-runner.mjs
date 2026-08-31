@@ -69,6 +69,7 @@ const HINTS = {
   STATE_SNAPSHOT: 'could not snapshot the state db; a server child may still hold it — see diag/processes',
   CARD_SETUP: 'card setup SQL failed against the live schema; the card is recorded as CAPTURE-INCOMPLETE',
   STATE_RESTORE: 'could not restore the pre-card state; subsequent cards may see contaminated state',
+  GATE_FAILED_CLOSED: 'the emission gate held the reply after four retries; the unit refuses to accept an unverified reply (same rule as full-capture.mjs)',
 };
 
 // ---------------------------------------------------------------- environment (mirrors launcher/coach.mjs §8)
@@ -84,6 +85,46 @@ function sealedEnv(extra = {}) {
   return env;
 }
 const REDACT = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i;
+// ---------------------------------------------------------------- Stop-hook emulation
+// THE STOP HOOK DOES NOT FIRE IN PRINT MODE (estate/build/full-capture.mjs, verified 2026-08-23; re-verified
+// here on Windows and macOS under Claude Code 2.1.251: stream-json shows SessionStart only). Bill's launcher
+// opens an interactive session where it does fire. So, exactly as the estate's harness does, every coach turn
+// runs `lifecycle.mjs hook-stop <DATA>` against the transcript Claude Code just wrote, and a block is fed back
+// as the next turn with the gate-retry marker, up to MAX_GATE_RETRIES. Every hold is recorded.
+const GATE_RETRY_MARKER = '<bill-coach-gate-retry>';
+const MAX_GATE_RETRIES = 4;
+function findTranscript(sessionId) {
+  if (!sessionId) return null;
+  const root = path.join(PROFILE, 'projects');
+  if (!fs.existsSync(root)) return null;
+  for (const d of fs.readdirSync(root)) { const f = path.join(root, d, `${sessionId}.jsonl`); if (fs.existsSync(f)) return f; }
+  return null;
+}
+function runStopHook(transcriptPath, tag) {
+  const r = spawnSync(process.execPath, [path.join(DATA, 'runtime', 'lifecycle.mjs'), 'hook-stop', DATA], { input: JSON.stringify({ transcript_path: transcriptPath }), env: { ...process.env, BILL_COACH_DATA_DIR: DATA }, encoding: 'utf8', timeout: 120000, windowsHide: true });
+  fs.writeFileSync(path.join(dirs.turns, `${tag}.hook-stop.json`), JSON.stringify({ transcriptPath, exit: r.status, stdout: r.stdout, stderr: r.stderr }, null, 2));
+  if (r.error || r.status !== 0) return { error: r.error?.message ?? String(r.stderr || '').trim().slice(0, 300) };
+  try { const out = JSON.parse(r.stdout || '{}'); return { block: out.decision === 'block' ? out.reason : null }; } catch (e) { return { error: `invalid hook JSON: ${e.message}` }; }
+}
+/** A coach turn as Bill would experience it: the raw turn, then the gate, then any retries the gate forces. */
+function coachTurn({ prompt, cwd, cont, label }) {
+  let r = claudeTurn({ lane: 'coach', prompt, cwd, cont, label });
+  const holds = [];
+  for (let attempt = 0; r.ok; attempt += 1) {
+    const transcript = findTranscript(r.meta.sessionId);
+    if (!transcript) { holds.push({ attempt, note: 'transcript not found; gate not run', sessionId: r.meta.sessionId }); break; }
+    const g = runStopHook(transcript, r.meta.tag);
+    if (g.error) { holds.push({ attempt, error: g.error }); break; }
+    if (!g.block) break;
+    holds.push({ attempt, reason: g.block.slice(0, 400) });
+    if (attempt >= MAX_GATE_RETRIES) { r = { ...r, ok: false, gateFailedClosed: true }; fail('GATE_FAILED_CLOSED', `held after ${MAX_GATE_RETRIES} retries`, { tag: r.meta.tag, lastReason: g.block.slice(0, 300) }); break; }
+    r = claudeTurn({ lane: 'coach', prompt: `${GATE_RETRY_MARKER}\n${g.block}`, cwd, cont: true, label: `${label}-after-gate-${attempt + 1}` });
+  }
+  r.holds = holds;
+  fs.writeFileSync(path.join(dirs.turns, `${r.meta.tag}.gate.json`), JSON.stringify({ label, holds, finalTag: r.meta.tag, gateFailedClosed: Boolean(r.gateFailedClosed) }, null, 2));
+  return r;
+}
+
 const redactedEnv = (env) => Object.fromEntries(Object.entries(env).map(([k, v]) => [k, REDACT.test(k) ? '<redacted>' : v]));
 
 // ---------------------------------------------------------------- state snapshots
@@ -174,24 +215,24 @@ async function runModule() {
   const profileJson = fs.existsSync(path.join(DATA, 'coach', 'principal-profile.json')) ? fs.readFileSync(path.join(DATA, 'coach', 'principal-profile.json'), 'utf8') : '{}';
   const exchanges = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12) : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 6) : Number(process.env.EXCHANGES || 2);
   let transcript = ''; const turns = [];
-  const push = (who, text, meta) => { turns.push({ who, text, meta }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
-  let r = claudeTurn({ lane: 'coach', prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
-  push('bill', mod.open); push('coach', r.reply, r.meta); if (!r.ok) return finishModule(mod, turns, false);
+  const push = (who, text, meta, holds) => { turns.push({ who, text, meta, holds }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
+  let r = coachTurn({ prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
+  push('bill', mod.open); push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
   for (let i = 0; i < exchanges; i += 1) {
     const b = claudeTurn({ lane: 'bill', prompt: billPersona(transcript, mod.brief, profileJson.slice(0, 6000)), cwd: billCwd, label: `${mod.key}-bill-${i + 1}` });
     const billText = b.reply.trim(); if (!b.ok || !billText) { push('bill', billText || '(empty)', b.meta); return finishModule(mod, turns, false); }
     push('bill', billText);
-    r = claudeTurn({ lane: 'coach', prompt: billText, cwd: coachCwd, cont: true, label: `${mod.key}-${String(i + 2).padStart(2, '0')}` });
-    push('coach', r.reply, r.meta); if (!r.ok) return finishModule(mod, turns, false);
+    r = coachTurn({ prompt: billText, cwd: coachCwd, cont: true, label: `${mod.key}-${String(i + 2).padStart(2, '0')}` });
+    push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
   }
-  r = claudeTurn({ lane: 'coach', prompt: mod.demand, cwd: coachCwd, cont: true, label: `${mod.key}-99-deliverable` });
-  push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true });
+  r = coachTurn({ prompt: mod.demand, cwd: coachCwd, cont: true, label: `${mod.key}-99-deliverable` });
+  push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds);
   return finishModule(mod, turns, r.ok);
 }
 function finishModule(mod, turns, complete) {
   const wrote = {}; // new rows across the unit, from per-turn deltas
   for (const f of fs.readdirSync(dirs.state).filter((x) => x.endsWith('.delta.json')).sort()) { const d = JSON.parse(fs.readFileSync(path.join(dirs.state, f), 'utf8')) || {}; for (const [t, v] of Object.entries(d)) if (v?.newRows?.length) wrote[t] = [...(wrote[t] ?? []), ...v.newRows]; }
-  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [{ kind: mod.key.toLowerCase(), body: t.text }] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name) })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: null };
+  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [{ kind: mod.key.toLowerCase(), body: t.text }] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: null };
   fs.mkdirSync(path.join(laneDir, 'captures'), { recursive: true });
   fs.writeFileSync(path.join(laneDir, 'captures', `${unitKey}.session.json`), `${JSON.stringify(session, null, 2)}\n`);
   fs.writeFileSync(path.join(dirs.turns, 'wrote.json'), `${JSON.stringify(wrote, null, 2)}\n`);
@@ -228,7 +269,7 @@ async function runCard() {
   if (setupOk) {
     const replies = []; let billText = '';
     for (let i = 0; i < card.bill_turns.length; i += 1) {
-      const r = claudeTurn({ lane: 'coach', prompt: card.bill_turns[i], cwd: coachCwd, cont: i > 0, label: `${card.id}-${i + 1}` });
+      const r = coachTurn({ prompt: card.bill_turns[i], cwd: coachCwd, cont: i > 0, label: `${card.id}-${i + 1}` });
       billText += `\n${card.bill_turns[i]}`; replies.push(r.reply); out.turns.push({ bill: card.bill_turns[i], replySha256: r.meta.replySha256, ok: r.ok, cost: r.meta.totalCostUsd, tools: r.meta.toolCalls.map((t) => t.name) }); write();
       if (!r.ok) { out.verdict = 'CAPTURE-INCOMPLETE'; write(); break; }
       if (i === card.bill_turns.length - 1) {
@@ -249,7 +290,7 @@ async function runCard() {
       } else if (wc.bill_turns) {
         try { const db = new DatabaseSync(STATE_DB); for (const s of wc.sql ?? []) db.exec(s); db.close(); } catch (e) { fail('CARD_SETUP', `wrong-case sql: ${e.message}`); }
         const wreplies = []; let wbill = '';
-        for (let i = 0; i < wc.bill_turns.length; i += 1) { const r = claudeTurn({ lane: 'coach', prompt: wc.bill_turns[i], cwd: path.join(dirs.work, 'coach-wrong'), cont: i > 0, label: `${card.id}-wrong-${i + 1}` }); wbill += `\n${wc.bill_turns[i]}`; wreplies.push(r.reply); if (!r.ok) break; }
+        for (let i = 0; i < wc.bill_turns.length; i += 1) { const r = coachTurn({ prompt: wc.bill_turns[i], cwd: path.join(dirs.work, 'coach-wrong'), cont: i > 0, label: `${card.id}-wrong-${i + 1}` }); wbill += `\n${wc.bill_turns[i]}`; wreplies.push(r.reply); if (!r.ok) break; }
         const checks = evaluateChecks(card, wreplies, { startedAt, bag: stateTextBag(pre.file ?? STATE_DB), billText: wbill });
         out.wrongCase = { mode: 'alternative-scenario', expect: wc.expect, note: wc.note, checks, exercised: true, differsFromMain: JSON.stringify(checks.map((c) => c.ok)) !== JSON.stringify(out.checks.map((c) => c.ok)) };
       }

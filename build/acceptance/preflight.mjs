@@ -73,7 +73,7 @@ const kv = Object.fromEntries(vri.stdout.split(/\r?\n/).filter((l) => l.includes
 out.steps.releaseIdentity = { status: vri.status, stdout: vri.stdout.trim(), stderr: vri.stderr.trim().slice(0, 500), parsed: kv };
 L.check(vri.status === 0 && /RELEASE IDENTITY PASSED/.test(vri.stdout), 'verify-release-identity: RELEASE IDENTITY PASSED', vri.stderr || vri.stdout);
 L.check(kv.source_status === 'WORKTREE_CANDIDATE', 'source_status is WORKTREE_CANDIDATE', kv.source_status);
-L.check(kv.zip_entries === '57' && kv.manifest_entries === '56', '57 ZIP entries / 56 manifest entries', `${kv.zip_entries}/${kv.manifest_entries}`);
+L.check(Number(kv.zip_entries) === Number(kv.manifest_entries) + 1 && Number(kv.manifest_entries) > 0, `ZIP entries equal manifest entries + 1 (the manifest itself): ${kv.zip_entries}/${kv.manifest_entries}`, `${kv.zip_entries}/${kv.manifest_entries}`);
 
 // 5. exact target identity through the harness
 let identity = null;

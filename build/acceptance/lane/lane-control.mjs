@@ -1,7 +1,7 @@
 // Controller (runs on the operator's Mac): dispatch lanes, find their tmate lines, relay sign-in,
 // watch, collect. Every action is appended to control/<run>.jsonl as it happens.
 //
-//   node lane-control.mjs dispatch --plan <dir> --adapters-ref <sha> [--cap 220] [--minutes 45]
+//   node lane-control.mjs dispatch --plan <dir> --adapters-ref <sha> [--ref <branch>] [--expected-identity <digest>] [--basis <sha>] [--cap 220] [--minutes 45]
 //   node lane-control.mjs ssh-lines --plan <dir>            → prints each lane's run id + ssh line when available
 //   node lane-control.mjs signin --run <id>                 → opens the login flow on the lane over tmate, prints the URL
 //   node lane-control.mjs code --run <id> --code <one-time> → injects the operator's code (never logged)
@@ -16,10 +16,15 @@ import path from 'node:path';
 
 const REPO = 'elliot-backbone/bill-coach-package';
 const WORKFLOW = 'windows-live-capture.yml';
-const REF = 'acceptance/2.1.2-candidate';
+const DEFAULT_REF = 'acceptance/2.1.2-candidate';
 const argv = process.argv.slice(2);
 const cmd = argv[0];
 const opt = (k, d) => (argv.indexOf(k) >= 0 ? argv[argv.indexOf(k) + 1] : d);
+// Workflow ref (the branch the dispatch runs on) and the identity inputs the workflow declares (expected_identity, basis).
+// Both identity inputs are optional here: when absent the workflow's own defaults apply.
+const REF = opt('--ref', DEFAULT_REF);
+const EXPECTED_IDENTITY = opt('--expected-identity');
+const BASIS = opt('--basis');
 const gh = (args, input) => { const r = spawnSync('gh', args, { encoding: 'utf8', input, maxBuffer: 64 * 1024 * 1024 }); if (r.status !== 0) throw new Error(`gh ${args.slice(0, 3).join(' ')}: ${r.stderr || r.stdout}`); return r.stdout; };
 const plan = opt('--plan');
 const state = plan ? path.join(plan, 'control.json') : null;
@@ -33,11 +38,13 @@ if (cmd === 'dispatch') {
   for (const f of manifests) {
     const m = JSON.parse(fs.readFileSync(path.join(plan, f), 'utf8'));
     const before = new Set(gh(['run', 'list', '--repo', REPO, '--workflow', WORKFLOW, '--limit', '20', '--json', 'databaseId', '-q', '.[].databaseId']).split('\n').filter(Boolean));
-    gh(['workflow', 'run', WORKFLOW, '--repo', REPO, '--ref', REF, '-f', `lane_manifest=${JSON.stringify(m)}`, '-f', `adapters_ref=${opt('--adapters-ref')}`, '-f', `cap_turns=${opt('--cap', String(m.cap))}`, '-f', `minutes=${opt('--minutes', '45')}`]);
+    const inputs = ['-f', `lane_manifest=${JSON.stringify(m)}`, '-f', `adapters_ref=${opt('--adapters-ref')}`, '-f', `cap_turns=${opt('--cap', String(m.cap))}`, '-f', `minutes=${opt('--minutes', '45')}`, ...(EXPECTED_IDENTITY ? ['-f', `expected_identity=${EXPECTED_IDENTITY}`] : []), ...(BASIS ? ['-f', `basis=${BASIS}`] : [])];
+    gh(['workflow', 'run', WORKFLOW, '--repo', REPO, '--ref', REF, ...inputs]);
     let runId = null;
     for (let i = 0; i < 12 && !runId; i += 1) { spawnSync('sleep', ['5']); const now = gh(['run', 'list', '--repo', REPO, '--workflow', WORKFLOW, '--limit', '20', '--json', 'databaseId', '-q', '.[].databaseId']).split('\n').filter(Boolean); runId = now.find((id) => !before.has(id)) ?? null; }
-    s.lanes[m.lane] = { runId, manifest: f, dispatchedAt: new Date().toISOString(), estTurns: m.estTurns };
-    log({ event: 'dispatched', lane: m.lane, runId }); save(s);
+    s.lanes[m.lane] = { runId, manifest: f, ref: REF, expectedIdentity: EXPECTED_IDENTITY ?? null, basis: BASIS ?? null, dispatchedAt: new Date().toISOString(), estTurns: m.estTurns };
+    s.ref = REF;
+    log({ event: 'dispatched', lane: m.lane, runId, ref: REF, expectedIdentity: EXPECTED_IDENTITY ?? null, basis: BASIS ?? null }); save(s);
     console.log(`lane ${m.lane}: run ${runId ?? '?'} (${m.units.length} units, est ${m.estTurns} turns)`);
   }
 } else if (cmd === 'ssh-lines') {

@@ -70,6 +70,7 @@ const HINTS = {
   CARD_SETUP: 'card setup SQL failed against the live schema; the card is recorded as CAPTURE-INCOMPLETE',
   STATE_RESTORE: 'could not restore the pre-card state; subsequent cards may see contaminated state',
   GATE_FAILED_CLOSED: 'the emission gate held the reply after four retries; the unit refuses to accept an unverified reply (same rule as full-capture.mjs)',
+  NUDGE_REPEATED: 'the gate held twice with the same reason; a repeated hold is terminal and the reply already emitted stands (recorded, not failed)',
 };
 
 // ---------------------------------------------------------------- environment (mirrors launcher/coach.mjs §8)
@@ -100,26 +101,47 @@ function findTranscript(sessionId) {
   for (const d of fs.readdirSync(root)) { const f = path.join(root, d, `${sessionId}.jsonl`); if (fs.existsSync(f)) return f; }
   return null;
 }
-function runStopHook(transcriptPath, tag) {
-  const r = spawnSync(process.execPath, [path.join(DATA, 'runtime', 'lifecycle.mjs'), 'hook-stop', DATA], { input: JSON.stringify({ transcript_path: transcriptPath }), env: { ...process.env, BILL_COACH_DATA_DIR: DATA }, encoding: 'utf8', timeout: 120000, windowsHide: true });
-  fs.writeFileSync(path.join(dirs.turns, `${tag}.hook-stop.json`), JSON.stringify({ transcriptPath, exit: r.status, stdout: r.stdout, stderr: r.stderr }, null, 2));
+// stopHookActive mirrors Claude Code production: false on the first Stop of a turn, true once the hook has
+// already blocked and the model is answering the block (a retry). lifecycle.mjs reads stop_hook_active.
+function runStopHook(transcriptPath, tag, stopHookActive = false) {
+  const r = spawnSync(process.execPath, [path.join(DATA, 'runtime', 'lifecycle.mjs'), 'hook-stop', DATA], { input: JSON.stringify({ transcript_path: transcriptPath, stop_hook_active: Boolean(stopHookActive) }), env: { ...process.env, BILL_COACH_DATA_DIR: DATA }, encoding: 'utf8', timeout: 120000, windowsHide: true });
+  fs.writeFileSync(path.join(dirs.turns, `${tag}.hook-stop.json`), JSON.stringify({ transcriptPath, stopHookActive: Boolean(stopHookActive), exit: r.status, stdout: r.stdout, stderr: r.stderr }, null, 2));
   if (r.error || r.status !== 0) return { error: r.error?.message ?? String(r.stderr || '').trim().slice(0, 300) };
   try { const out = JSON.parse(r.stdout || '{}'); return { block: out.decision === 'block' ? out.reason : null }; } catch (e) { return { error: `invalid hook JSON: ${e.message}` }; }
 }
 /** A coach turn as Bill would experience it: the raw turn, then the gate, then any retries the gate forces. */
+const normaliseReason = (s) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 200);
+/** Keep the transcript Claude Code wrote for this attempt next to the turn files (every coach attempt, retries included). */
+function keepTranscript(sessionId, tag) {
+  const transcript = findTranscript(sessionId);
+  if (!transcript) return null;
+  try { fs.copyFileSync(transcript, path.join(dirs.turns, `${tag}.transcript.jsonl`)); } catch (e) { append('errors.jsonl', { class: 'TRANSCRIPT_COPY', tag, message: e.message }); }
+  return transcript;
+}
 function coachTurn({ prompt, cwd, cont, label }) {
   let r = claudeTurn({ lane: 'coach', prompt, cwd, cont, label });
   const holds = [];
+  let previousReason = null;
   for (let attempt = 0; r.ok; attempt += 1) {
-    const transcript = findTranscript(r.meta.sessionId);
+    const transcript = keepTranscript(r.meta.sessionId, r.meta.tag);
     if (!transcript) { holds.push({ attempt, note: 'transcript not found; gate not run', sessionId: r.meta.sessionId }); break; }
-    const g = runStopHook(transcript, r.meta.tag);
+    const g = runStopHook(transcript, r.meta.tag, attempt > 0);
     if (g.error) { holds.push({ attempt, error: g.error }); break; }
     if (!g.block) break;
+    const reason = normaliseReason(g.block);
+    if (previousReason !== null && reason === previousReason) {
+      // A hold identical to the previous hold is terminal: the model is not going to answer it differently.
+      // Record it, do not fail the turn, and let the reply already emitted stand.
+      holds.push({ attempt, reason: g.block.slice(0, 400), repeated: true });
+      fail('NUDGE_REPEATED', `gate repeated the same hold at attempt ${attempt}`, { tag: r.meta.tag, reason: g.block.slice(0, 300) });
+      break;
+    }
+    previousReason = reason;
     holds.push({ attempt, reason: g.block.slice(0, 400) });
     if (attempt >= MAX_GATE_RETRIES) { r = { ...r, ok: false, gateFailedClosed: true }; fail('GATE_FAILED_CLOSED', `held after ${MAX_GATE_RETRIES} retries`, { tag: r.meta.tag, lastReason: g.block.slice(0, 300) }); break; }
     r = claudeTurn({ lane: 'coach', prompt: `${GATE_RETRY_MARKER}\n${g.block}`, cwd, cont: true, label: `${label}-after-gate-${attempt + 1}` });
   }
+  if (!r.ok && r.meta?.sessionId) keepTranscript(r.meta.sessionId, r.meta.tag);
   r.holds = holds;
   fs.writeFileSync(path.join(dirs.turns, `${r.meta.tag}.gate.json`), JSON.stringify({ label, holds, finalTag: r.meta.tag, gateFailedClosed: Boolean(r.gateFailedClosed) }, null, 2));
   return r;
@@ -181,12 +203,13 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   fs.writeFileSync(`${base}.stdout`, r.stdout ?? ''); fs.writeFileSync(`${base}.stderr`, r.stderr ?? '');
   // stream-json → structured meta
   const events = []; let result = null; let init = null; const toolCalls = []; const toolResults = [];
+  const reviewDrafts = []; // every `draft` submitted to review_draft this turn, in stream order (the last one is what the gate verified)
   for (const line of String(r.stdout ?? '').split(/\r?\n/)) {
     if (!line.trim()) continue; let ev; try { ev = JSON.parse(line); } catch { continue; }
     events.push(ev);
     if (ev.type === 'system' && ev.subtype === 'init') init = ev;
     if (ev.type === 'result') result = ev;
-    if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) for (const c of ev.message.content) if (c.type === 'tool_use') toolCalls.push({ id: c.id, name: c.name, input: c.input });
+    if (ev.type === 'assistant' && Array.isArray(ev.message?.content)) for (const c of ev.message.content) if (c.type === 'tool_use') { toolCalls.push({ id: c.id, name: c.name, input: c.input }); if (/review_draft$/.test(String(c.name)) && typeof c.input?.draft === 'string') reviewDrafts.push(c.input.draft); }
     if (ev.type === 'user' && Array.isArray(ev.message?.content)) for (const c of ev.message.content) if (c.type === 'tool_result') toolResults.push({ tool_use_id: c.tool_use_id, is_error: c.is_error ?? false, contentHead: JSON.stringify(c.content).slice(0, 600) });
   }
   fs.writeFileSync(`${base}.stream.jsonl`, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
@@ -197,7 +220,7 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   const after = snapshot(`${tag}.after`);
   let delta = null; try { delta = rowDelta(before.file, after.file); } catch (e) { delta = { error: e.message }; }
   fs.writeFileSync(path.join(dirs.state, `${tag}.delta.json`), `${JSON.stringify(delta, null, 2)}\n`);
-  const meta = { schema: 'bill-coach.turn-meta/v1', unitKey, tag, lane, label, exit: r.status, signal: r.signal, timedOut: r.error?.code === 'ETIMEDOUT', spawnError: r.error ? String(r.error.message) : null, durationMs, replySha256: sha(reply), replyBytes: Buffer.byteLength(reply), events: events.length, initTools: init?.tools ?? null, initMcpServers: init?.mcp_servers ?? null, model: init?.model ?? result?.modelUsage ? Object.keys(result?.modelUsage ?? {}) : null, sessionId: result?.session_id ?? init?.session_id ?? null, stopReason: result?.stop_reason ?? null, isError: result?.is_error ?? null, numTurns: result?.num_turns ?? null, usage: result?.usage ?? null, totalCostUsd: result?.total_cost_usd ?? null, durationApiMs: result?.duration_api_ms ?? null, toolCalls, toolResults, mcpLog: fs.existsSync(mcpLog) ? { file: mcpLog, lines: fs.readFileSync(mcpLog, 'utf8').split('\n').filter(Boolean).length } : null, stateBefore: before.sha256, stateAfter: after.sha256, stateChanged: before.sha256 !== after.sha256, endedAt: now() };
+  const meta = { schema: 'bill-coach.turn-meta/v1', unitKey, tag, lane, label, exit: r.status, signal: r.signal, timedOut: r.error?.code === 'ETIMEDOUT', spawnError: r.error ? String(r.error.message) : null, durationMs, replySha256: sha(reply), replyBytes: Buffer.byteLength(reply), events: events.length, initTools: init?.tools ?? null, initMcpServers: init?.mcp_servers ?? null, model: init?.model ?? result?.modelUsage ? Object.keys(result?.modelUsage ?? {}) : null, sessionId: result?.session_id ?? init?.session_id ?? null, stopReason: result?.stop_reason ?? null, isError: result?.is_error ?? null, numTurns: result?.num_turns ?? null, usage: result?.usage ?? null, totalCostUsd: result?.total_cost_usd ?? null, durationApiMs: result?.duration_api_ms ?? null, toolCalls, toolResults, reviewDrafts, mcpLog: fs.existsSync(mcpLog) ? { file: mcpLog, lines: fs.readFileSync(mcpLog, 'utf8').split('\n').filter(Boolean).length } : null, stateBefore: before.sha256, stateAfter: after.sha256, stateChanged: before.sha256 !== after.sha256, endedAt: now() };
   fs.writeFileSync(`${base}.meta.json`, `${JSON.stringify(meta, null, 2)}\n`);
   append('receipts.jsonl', { tag, lane, label, exit: r.status, durationMs, replySha256: meta.replySha256, cost: meta.totalCostUsd, tools: toolCalls.map((t) => t.name), stateChanged: meta.stateChanged });
   if (r.error && r.error.code !== 'ETIMEDOUT') { fail('CLAUDE_START', r.error.message, { tag }); return { ok: false, reply, meta }; }
@@ -229,10 +252,35 @@ async function runModule() {
   push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds);
   return finishModule(mod, turns, r.ok);
 }
+/** Dated coverage slots, read from the newest state snapshot this unit took (VACUUM INTO copies under dirs.state). */
+function coverageSlotsDated() {
+  const files = fs.readdirSync(dirs.state).filter((f) => f.endsWith('.sqlite')).map((f) => path.join(dirs.state, f));
+  if (!files.length) return null;
+  const newest = files.map((f) => ({ f, m: fs.statSync(f).mtimeMs })).sort((a, b) => b.m - a.m || (a.f < b.f ? 1 : -1))[0].f;
+  let db = null;
+  try {
+    db = new DatabaseSync(newest, { readOnly: true });
+    const cols = db.prepare('PRAGMA table_info("narrative_coverage")').all().map((c) => String(c.name));
+    if (!cols.length) return null;
+    // Prefer a column that names a date; fall back to a timestamp column ending in "at".
+    const dateCol = cols.find((c) => /dated/i.test(c)) ?? cols.find((c) => /date/i.test(c)) ?? cols.find((c) => /at$/i.test(c));
+    if (!dateCol) return null;
+    const hasSlot = cols.includes('slot');
+    const where = [`"${dateCol}" IS NOT NULL`, `TRIM(CAST("${dateCol}" AS TEXT)) <> ''`, ...(hasSlot ? ['"slot" IS NOT NULL'] : [])].join(' AND ');
+    const row = db.prepare(`SELECT COUNT(*) n FROM "narrative_coverage" WHERE ${where}`).get();
+    return Number(row?.n ?? 0);
+  } catch (e) { append('errors.jsonl', { class: 'COVERAGE_COUNT', file: newest, message: e.message }); return null; } finally { try { db?.close(); } catch { /* already closed */ } }
+}
+/** The body Bill was shown: the draft the gate verified (last review_draft call of the turn), else the reply text, marked ungated. */
+function displayedDeliverable(mod, t) {
+  const drafts = t.meta?.reviewDrafts ?? [];
+  if (drafts.length) return { kind: mod.key.toLowerCase(), body: drafts[drafts.length - 1] };
+  return { kind: mod.key.toLowerCase(), body: t.text, ungated: true };
+}
 function finishModule(mod, turns, complete) {
   const wrote = {}; // new rows across the unit, from per-turn deltas
   for (const f of fs.readdirSync(dirs.state).filter((x) => x.endsWith('.delta.json')).sort()) { const d = JSON.parse(fs.readFileSync(path.join(dirs.state, f), 'utf8')) || {}; for (const [t, v] of Object.entries(d)) if (v?.newRows?.length) wrote[t] = [...(wrote[t] ?? []), ...v.newRows]; }
-  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [{ kind: mod.key.toLowerCase(), body: t.text }] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: null };
+  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [displayedDeliverable(mod, t)] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: coverageSlotsDated() };
   fs.mkdirSync(path.join(laneDir, 'captures'), { recursive: true });
   fs.writeFileSync(path.join(laneDir, 'captures', `${unitKey}.session.json`), `${JSON.stringify(session, null, 2)}\n`);
   fs.writeFileSync(path.join(dirs.turns, 'wrote.json'), `${JSON.stringify(wrote, null, 2)}\n`);

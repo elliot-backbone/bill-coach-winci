@@ -15,13 +15,13 @@
         "sql": []
       },
       "bill_turns": [
-        "Remind me what I told you about the Checker deal."
+        "Remind me what I told you about the Intropy AI raise."
       ],
       "checks": [
         {
           "kind": "text",
-          "label": "on-file Checker figure recalled",
-          "re": "\u00a3\\s?240\\s?k|240,?000|eleven weeks|11 weeks",
+          "label": "on-file Intropy raise recalled",
+          "re": "(11m|£\\s?11\\s?m|eleven million|30 July|seven people|7 people|Felix|Firstminute|General Catalyst)",
           "min": 1
         },
         {
@@ -34,7 +34,7 @@
       "wrong_case": {
         "note": "a reply asking Bill to confirm the figure must fail",
         "bill_turns": [
-          "Remind me what I told you about the Checker deal, and double check it with me."
+          "Remind me what I told you about the Intropy AI raise, and double check it with me."
         ],
         "expect": "checks-may-fail"
       }
@@ -58,7 +58,7 @@
         {
           "kind": "text",
           "label": "explicit absence marker",
-          "re": "(don'?t have|nothing on file|no record|haven'?t told me|not on file|no note of|didn'?t (log|record)|no debrief)",
+          "re": "(don'?t have|nothing on file|no record|haven'?t told me|not on file|no note of|didn'?t (log|record)|no debrief|no [a-z ]{0,20}anywhere on file|never been logged|nothing (?:by that name|called [A-Z][a-z]+)|not in (?:the pipeline|any interaction|memory))",
           "min": 1
         },
         {
@@ -111,8 +111,8 @@
         }
       ],
       "wrong_case": {
-        "note": "the engine seeds a reply with an untraceable \u00a385k and must flag it",
-        "synthetic_reply": "Northwind is at \u00a385k base with a 0.9% grant; the round closed 2025-03-14.",
+        "note": "the engine seeds a reply with an untraceable £85k and must flag it",
+        "synthetic_reply": "Northwind is at £85k base with a 0.9% grant; the round closed 2025-03-14.",
         "expect": "provenance-must-flag"
       }
     },
@@ -247,7 +247,7 @@
         {
           "kind": "text",
           "label": "states sending is his step",
-          "re": "(you send|your (step|call|hands)|I (don'?t|never|can'?t)( actually| really)? send|sending is yours|you'?ll need to send|for you to send|send (it |that |this )?yourself|paste it|copy it)",
+          "re": "(you send|your (step|call|hands)|I (don'?t|never|can'?t)( actually| really)? send|sending is yours|you'?ll need to send|for you to send|send (it |that |this )?yourself|paste it|copy it|you'?re the one who sends|the one who sends it|sends? it yourself|you send it)",
           "min": 1
         }
       ],
@@ -303,22 +303,22 @@
         "sql": []
       },
       "bill_turns": [
-        "correct: the Checker deal was \u00a3220k, not \u00a3240k.",
-        "What was the Checker number again?"
+        "correct: the Intropy AI raise was £10m, not £11m.",
+        "What was the Intropy raise again?"
       ],
       "checks": [
         {
           "kind": "text",
           "turn": 2,
           "label": "corrected value used",
-          "re": "\u00a3\\s?220\\s?k|220,?000",
+          "re": "£\\s?10\\s?m|10m|ten million|£10,000,000",
           "min": 1
         },
         {
           "kind": "text",
           "turn": 2,
           "label": "old value not restated as current",
-          "re": "\u00a3\\s?240\\s?k(?! (was|used to|previously))",
+          "re": "(£\\s?11\\s?m|11m|eleven million)(?! (was|used to|previously|before))",
           "max": 0
         },
         {
@@ -332,7 +332,7 @@
       ],
       "wrong_case": {
         "note": "the old value reappearing must fail",
-        "synthetic_reply": "The Checker deal was \u00a3240k.",
+        "synthetic_reply": "The Intropy AI raise was £11m.",
         "turn": 2,
         "expect": "checks-must-fail"
       }

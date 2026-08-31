@@ -58,7 +58,7 @@
         {
           "kind": "text",
           "label": "explicit absence marker",
-          "re": "(don'?t have|nothing on file|no record|haven'?t told me|not on file|no note of|didn'?t (log|record)|no debrief|no [a-z ]{0,20}anywhere on file|never been logged|nothing (?:by that name|called [A-Z][a-z]+)|not in (?:the pipeline|any interaction|memory))",
+          "re": "(don'?t have|nothing on file|no record|haven'?t told me|not on file|no note of|didn'?t (log|record)|no debrief|no [a-z ]{0,20}anywhere on file|never been logged|nothing (by that name|called [A-Z][a-z]+)|not in (the pipeline|any interaction|memory)|no [a-z ]{0,30} on file|not in the pipeline|no [A-Za-z]+ in the pipeline|nothing (on|in) (the )?(funnel|memory|library|record))",
           "min": 1
         },
         {
@@ -207,7 +207,7 @@
         {
           "kind": "text",
           "label": "uncertainty marker present",
-          "re": "(can'?t know|don'?t know how he|might|likely|probably|my guess|no way to know|depends)",
+          "re": "(can'?t know|don'?t know how he|might|likely|probably|my guess|no way to know|depends|not going to guess|no read on|can'?t (?:tell|say) how|I have no read|won'?t guess)",
           "min": 1
         },
         {
@@ -318,7 +318,7 @@
           "kind": "text",
           "turn": 2,
           "label": "old value not restated as current",
-          "re": "(£\\s?11\\s?m|11m|eleven million)(?! (was|used to|previously|before))",
+          "re": "(£\\s?11\\s?m|\\$\\s?11\\s?M|11m|eleven million)(?! (was|used to|previously|before|from the market|logged from|I'?d had|baseline))(?<!(?:overriding|baseline|had it at|old value|from the market data export|had) [^.]{0,40})",
           "max": 0
         },
         {
@@ -396,7 +396,8 @@
           "kind": "text",
           "label": "no pipeline counts in the first reply",
           "re": "\\bP[0-5]\\b|\\d+ (live|rows|companies|conversations)",
-          "max": 0
+          "max": 0,
+          "exclude_lines": "MODULE PROGRESS|^\\s*─{6,}|·\\s+(?:depends:|→ say)|blocked-by:"
         },
         {
           "kind": "text",

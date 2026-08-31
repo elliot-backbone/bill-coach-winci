@@ -230,7 +230,13 @@ function sessionStartPromptFile() {
       const base = fs.existsSync(SYSTEM_PROMPT) ? fs.readFileSync(SYSTEM_PROMPT, 'utf8') : '';
       const combined = path.join(dirs.turns, 'system-prompt.with-session-start.md');
       fs.writeFileSync(combined, `${base}\n\n${context}\n`);
-      SESSION_START_FILE = combined;
+      // Continuation turns: production injects the SessionStart context once; the "Begin by calling start_coach"
+      // intent is its last paragraph. Measured rc5b: re-appending it on every -p process made retries re-open the
+      // session and print the board. Continuation turns keep the boundary act, the law and the duties only.
+      const paras = context.trim().split(/\n\n+/); const withoutIntent = paras.filter((x) => !/start_coach/.test(x)).join('\n\n');
+      const combinedCont = path.join(dirs.turns, 'system-prompt.with-session-start.cont.md');
+      fs.writeFileSync(combinedCont, `${base}\n\n${withoutIntent}\n`);
+      SESSION_START_FILE = { first: combined, cont: combinedCont };
     }
   } catch (e) { fs.writeFileSync(path.join(dirs.turns, 'session-start.hook.json'), JSON.stringify({ error: e.message })); }
   return SESSION_START_FILE;
@@ -244,7 +250,7 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   fs.writeFileSync(`${base}.prompt.txt`, prompt);
   const mcpLog = path.join(dirs.mcp, `${unitKey}-${tag}.jsonl`);
   const args = lane === 'coach'
-    ? ['-p', '--setting-sources', 'user', '--tools', 'WebSearch,WebFetch', ...((sessionStartPromptFile() || (fs.existsSync(SYSTEM_PROMPT) ? SYSTEM_PROMPT : null)) ? ['--append-system-prompt-file', sessionStartPromptFile() || SYSTEM_PROMPT] : []), '--output-format', 'stream-json', '--verbose', '--debug', ...(cont ? ['--continue'] : [])]
+    ? ['-p', '--setting-sources', 'user', '--tools', 'WebSearch,WebFetch', ...((() => { const f = sessionStartPromptFile(); const pick = f ? (cont ? f.cont : f.first) : (fs.existsSync(SYSTEM_PROMPT) ? SYSTEM_PROMPT : null); return pick ? ['--append-system-prompt-file', pick] : []; })()), '--output-format', 'stream-json', '--verbose', '--debug', ...(cont ? ['--continue'] : [])]
     : ['-p', '--setting-sources', 'user', '--strict-mcp-config', '--mcp-config', NO_MCP, '--output-format', 'stream-json', '--verbose'];
   const env = sealedEnv({ NODE_OPTIONS: `--import ${JSON.stringify(new URL('mcp-tap.mjs', import.meta.url).href)}`.replace(/"/g, ''), MCP_TAP_LOG: mcpLog });
   const before = snapshot(`${tag}.before`);
@@ -364,7 +370,7 @@ function stateTextBag(file) {
 function evaluateChecks(card, replies, ctx) {
   return card.checks.map((ch) => {
     const reply = replies[(ch.turn ?? replies.length) - 1] ?? '';
-    if (ch.kind === 'text') { const n = (reply.match(new RegExp(ch.re, 'gim')) ?? []).length; const ok = (ch.min === undefined || n >= ch.min) && (ch.max === undefined || n <= ch.max); return { label: ch.label, kind: 'text', turn: ch.turn ?? replies.length, matches: n, min: ch.min, max: ch.max, ok }; }
+    if (ch.kind === 'text') { const subject = ch.exclude_lines ? reply.split('\n').filter((l) => !new RegExp(ch.exclude_lines, 'i').test(l)).join('\n') : reply; const n = (subject.match(new RegExp(ch.re, 'gim')) ?? []).length; const ok = (ch.min === undefined || n >= ch.min) && (ch.max === undefined || n <= ch.max); return { label: ch.label, kind: 'text', turn: ch.turn ?? replies.length, matches: n, min: ch.min, max: ch.max, ok }; }
     if (ch.kind === 'sql') { try { const db = new DatabaseSync(STATE_DB, { readOnly: true }); const row = db.prepare(ch.query.replace('{{card_started_at}}', ctx.startedAt)).get(); db.close(); const ok = ch.expect.n !== undefined ? row.n === ch.expect.n : ch.expect.n_min !== undefined ? row.n >= ch.expect.n_min : true; return { label: ch.label, kind: 'sql', row, expect: ch.expect, ok }; } catch (e) { return { label: ch.label, kind: 'sql', error: e.message, ok: false }; } }
     if (ch.kind === 'provenance') { const bag = ctx.bag + ctx.billText.toLowerCase().replace(/\s+/g, ''); const untraceable = tokens(reply).filter((t) => !bag.includes(t.replace('£', '£')) && !bag.includes(t.replace(/[£,]/g, ''))); return { label: ch.label, kind: 'provenance', tokens: tokens(reply), untraceable, ok: untraceable.length <= (ch.max ?? 0) }; }
     return { label: ch.label, ok: false, error: 'unknown check kind' };

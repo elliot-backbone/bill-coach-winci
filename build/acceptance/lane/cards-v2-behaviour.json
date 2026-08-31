@@ -263,7 +263,7 @@
         {
           "kind": "text",
           "label": "the strongest objection to its own recommendation is named",
-          "re": "(the case against|against that|the risk (is|here)|what would make (this|that|me) wrong|where (this|I) could be wrong|the counter|the objection|the catch|the downside|what I'?d worry about)",
+          "re": "(the case against|against that|the risk (is|here)|what would make (this|that|me) wrong|where (this|I) could be wrong|the counter|the objection|the catch|the downside|what I'?d worry about|before that, though|is this an actual offer|before (?:I|we) (?:stand behind|commit)|the thing to push on|what I'?d check first|the one thing I'?d (?:check|test))",
           "min": 1
         },
         {

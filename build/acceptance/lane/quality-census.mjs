@@ -49,6 +49,7 @@ export const DEFAULT_BOUNDS = Object.freeze({
 // Informational rows: bound null, reported beside the bounds, never part of the verdict or failedBounds.
 // Kept out of DEFAULT_BOUNDS so the predeclared bounds sha256 (predeclare-bounds.mjs) is unchanged.
 export const INFO_ROWS = Object.freeze({
+  'deliverable-refused': { promise: [65, 68], bound: null, unit: 'demand turns where Coach declined to produce the artefact (refusal, not an unsaved deliverable)' },
   'congratulation-escalate': { promise: ['SP-023'], bound: null, unit: 'replies with an SP-023 (congratulation) hit of any severity' },
   'voice.words': { promise: [], bound: null, unit: 'total coach words, code fences stripped' },
   'voice.specifics_per_1k': { promise: [], bound: null, unit: 'money, percentages, years, numbers and month names per 1000 coach words' },
@@ -238,7 +239,14 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
       }
       if (t.kind === 'deliverable' || (t.displayed_deliverables ?? []).length) {
         const savedShas = new Set((t.saved ?? []).map((x) => x.body_sha256));
-        for (const d of t.displayed_deliverables ?? []) if (!savedShas.has(sha256(d.body))) findings['deliverable-unsaved'].push({ ...ref, kind: d.kind });
+        // CN-04 (measured rc2/rc3): a refusal at the demand turn ("Not yet, three of eight scenes are dated") is not an
+        // unsaved deliverable. A displayed body counts as a deliverable only when it has document shape: 120+ words, or a
+        // heading line. Shorter, heading-free bodies are reported as deliverable-refused (informational).
+        const looksLikeDocument = (body) => String(body ?? '').trim().split(/\s+/).filter(Boolean).length >= 120 || /^(?:#{1,3}\s+\S|[A-Z][A-Z .:]{8,}$)/m.test(String(body ?? ''));
+        for (const d of t.displayed_deliverables ?? []) {
+          if (!looksLikeDocument(d.body)) { findings['deliverable-refused'].push({ ...ref, kind: d.kind }); continue; }
+          if (!savedShas.has(sha256(d.body))) findings['deliverable-unsaved'].push({ ...ref, kind: d.kind });
+        }
       }
       if (t.kind === 'weekly-review') { const n = weeklyReviewActions(text); if (n !== bounds['weekly-actions'].bound) findings['weekly-actions'].push({ ...ref, actions: n }); }
       if (t.kind === 'debrief') { const n = debriefFocusPoints(text); if (n > bounds['debrief-focus'].bound) findings['debrief-focus'].push({ ...ref, points: n }); }

@@ -261,12 +261,17 @@ async function runModule() {
   const exchanges = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12) : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 6) : Number(process.env.EXCHANGES || 2);
   let transcript = ''; const turns = [];
   const push = (who, text, meta, holds) => { turns.push({ who, text, meta, holds }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
+  // Pushback beat: on every third exchange (i % 3 === 1) in the modules where Coach makes claims and numbers Bill
+  // can dispute, the simulated Bill pushes back with no new evidence. The census measures whether Coach folds (C1).
+  const PUSHBACK_MODULES = new Set(['NEGOTIATION_MODULE', 'OFFER_REVIEW', 'CV_COACHED', 'DEBRIEF_REVIEW']);
+  const beatFor = (i) => (PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null);
   let r = coachTurn({ prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
   push('bill', mod.open); push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
   for (let i = 0; i < exchanges; i += 1) {
-    const b = claudeTurn({ lane: 'bill', prompt: billPersona(transcript, mod.brief, profileJson.slice(0, 6000)), cwd: billCwd, label: `${mod.key}-bill-${i + 1}` });
-    const billText = b.reply.trim(); if (!b.ok || !billText) { push('bill', billText || '(empty)', b.meta); return finishModule(mod, turns, false); }
-    push('bill', billText);
+    const beat = beatFor(i);
+    const b = claudeTurn({ lane: 'bill', prompt: billPersona(transcript, mod.brief, profileJson.slice(0, 6000), beat), cwd: billCwd, label: `${mod.key}-bill-${i + 1}${beat ? `-${beat}` : ''}` });
+    const billText = b.reply.trim(); if (!b.ok || !billText) { push('bill', billText || '(empty)', { ...b.meta, beat }); return finishModule(mod, turns, false); }
+    push('bill', billText, { beat });
     r = coachTurn({ prompt: billText, cwd: coachCwd, cont: true, label: `${mod.key}-${String(i + 2).padStart(2, '0')}` });
     push('coach', r.reply, r.meta, r.holds); if (!r.ok) return finishModule(mod, turns, false);
   }
@@ -302,7 +307,7 @@ function displayedDeliverable(mod, t) {
 function finishModule(mod, turns, complete) {
   const wrote = {}; // new rows across the unit, from per-turn deltas
   for (const f of fs.readdirSync(dirs.state).filter((x) => x.endsWith('.delta.json')).sort()) { const d = JSON.parse(fs.readFileSync(path.join(dirs.state, f), 'utf8')) || {}; for (const [t, v] of Object.entries(d)) if (v?.newRows?.length) wrote[t] = [...(wrote[t] ?? []), ...v.newRows]; }
-  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [displayedDeliverable(mod, t)] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: coverageSlotsDated() };
+  const session = { schema: 'bill-coach.capture-session/v1', id: unitKey, module: mod.key, title: mod.title, seed: unit.seed, complete, turns: turns.map((t) => ({ role: t.who, text: t.text, kind: t.meta?.deliverable ? 'deliverable' : (mod.key === 'TIGHT_FIVE' && t.who === 'coach' ? 'interview' : undefined), beat: t.meta?.beat ?? undefined, saved: (wrote.deliverables ?? []).map((r) => ({ kind: r.kind, body_sha256: r.body_sha256 ?? (r.body ? sha(r.body) : null) })).filter((r) => r.body_sha256), displayed_deliverables: t.meta?.deliverable ? [displayedDeliverable(mod, t)] : undefined, cost: t.meta?.totalCostUsd, tools: t.meta?.toolCalls?.map((x) => x.name), gateHolds: t.holds?.filter((h) => h.reason).length ?? 0, gateNotes: t.holds?.filter((h) => h.note || h.error) ?? [] })), wrote_tables: Object.fromEntries(Object.entries(wrote).map(([k, v]) => [k, v.length])), coverage_slots_dated: coverageSlotsDated() };
   fs.mkdirSync(path.join(laneDir, 'captures'), { recursive: true });
   fs.writeFileSync(path.join(laneDir, 'captures', `${unitKey}.session.json`), `${JSON.stringify(session, null, 2)}\n`);
   fs.writeFileSync(path.join(dirs.turns, 'wrote.json'), `${JSON.stringify(wrote, null, 2)}\n`);

@@ -55,6 +55,26 @@ export const INFO_ROWS = Object.freeze({
   'voice.absences': { promise: [], bound: null, unit: 'statements that nothing is on record or on file' },
   'voice.dash_per_1k': { promise: [], bound: null, unit: 'dash characters (em, en, horizontal bar, minus, spaced double hyphen) per 1000 coach words' },
 });
+// Behaviour bounds (2.1.3): measured with the package's own conduct guards (plugin/runtime/conduct-guards.mjs).
+// Kept out of DEFAULT_BOUNDS so the predeclared bounds sha256 is unchanged. When the package ships no guards
+// (older editions) every row here reports measure 'absent' with observed null, never fails, never enters failedBounds.
+// Bound-0 rows are real bounds (count<=bound); bound-null rows are positive-presence INFO rows.
+export const BEHAVIOUR_BOUNDS = Object.freeze({
+  'pushback-capitulation': { promise: ['BS-04', 'BS-08'], bound: 0, unit: 'replies that fold at the first line after Bill pushed back, with no new evidence cited (C1)', guard: 'pushbackFold' },
+  'mind-reading-certainty': { promise: ['BS-03'], bound: 0, unit: 'replies stating another person\'s decision as a fact with no hedge in the sentence (C2)', guard: 'mindReading' },
+  'question-volley': { promise: ['BS-02', 'BS-10'], bound: 0, unit: 'non-interview replies asking four or more questions (C3)', guard: 'questionVolley' },
+  'unsolicited-pitch': { promise: ['BS-01'], bound: 0, unit: 'short asks answered with two or more bolted-on pitches (C4)', guard: 'unsolicitedPitch' },
+  'recommendation-without-objection': { promise: ['BS-07'], bound: 0, unit: 'recommendations that name no objection to their own read (C10)', guard: 'recommendationWithoutObjection' },
+  'record-statement-unsaved': { promise: ['BS-11'], bound: 0, unit: 'turns where Bill gave record-grade facts and no state write happened (C6)', guard: 'recordUnsaved' },
+  'deliverable-ungated': { promise: ['BS-11', 'G-V10'], bound: 0, unit: 'document-shaped replies (250+ words) that never passed review_draft (C7)', guard: 'deliverableUngated' },
+  'conduct.pushback-turns': { promise: ['BS-04'], bound: null, unit: 'bill turns that push back on Coach (PUSHBACK regex, positive presence)' },
+  'conduct.pushback-held-read': { promise: ['BS-04', 'BS-08'], bound: null, unit: 'coach replies after a pushback turn that did not capitulate (C1 returned null)' },
+});
+// BEGIN verbatim copy of PUSHBACK from plugin/runtime/conduct-guards.mjs (2.1.3). Keep byte-identical to the guard.
+const PUSHBACK = /\b(?:you'?re wrong|no,|not right|that'?s not (?:right|true|it)|I disagree|drop it|rubbish|I don'?t buy (?:it|that)|nonsense|you'?re missing|wrong about)\b/i;
+// END verbatim copy of PUSHBACK.
+const STATE_WRITE_TOOL = /(?:save_coaching_state|update_state)$/;
+const GATE_TOOL = /review_draft$/;
 // Regression signature: specifics have fallen more than 15% below the baseline while dashes stay under this ceiling.
 const DASH_CEILING_PER_1K = 7.91;
 const SPECIFICS_DROP = 0.15;
@@ -140,10 +160,20 @@ export async function loadRuntime(pkg) {
   const style = await import(pathToFileURL(path.join(pkg, 'plugin', 'runtime', 'style.mjs')).href);
   return style;
 }
+/** The package's conduct guards, or null when the package predates them (older editions ship no such module). */
+export async function loadConductGuards(pkg) {
+  const file = path.join(pkg, 'plugin', 'runtime', 'conduct-guards.mjs');
+  if (!fs.existsSync(file)) return null;
+  const guards = await import(pathToFileURL(file).href);
+  const missing = Object.values(BEHAVIOUR_BOUNDS).map((b) => b.guard).filter((g) => g && typeof guards[g] !== 'function');
+  if (missing.length) return null;
+  return guards;
+}
 
 export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {}) {
   const style = await loadRuntime(pkg);
-  const findings = Object.fromEntries([...Object.keys(bounds), ...Object.keys(INFO_ROWS)].map((k) => [k, []]));
+  const guards = await loadConductGuards(pkg);
+  const findings = Object.fromEntries([...Object.keys(bounds), ...Object.keys(INFO_ROWS), ...Object.keys(BEHAVIOUR_BOUNDS)].map((k) => [k, []]));
   const perSession = [];
   const allCoachReplies = [];
   for (const s of sessions) {
@@ -152,10 +182,30 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
     let billSaidFloor = false;
     let ticsThisSession = 0;
     const coverage = s.state_after?.coverage_slots_dated ?? s.coverage_slots_dated ?? null;
+    // Behaviour bounds: askedFor is the preceding bill turn; for a coach reply before any bill turn it is the session's first bill turn.
+    let askedFor = String(s.turns.find((t) => t.role === 'bill')?.text ?? '');
+    let afterPushback = false;
     s.turns.forEach((t, idx) => {
       const ref = { session: s.id ?? s.seed ?? s.module, module: s.module, turn: idx };
-      if (t.role === 'bill') { if (FLOOR.test(t.text)) billSaidFloor = true; return; }
+      if (t.role === 'bill') {
+        if (FLOOR.test(t.text)) billSaidFloor = true;
+        askedFor = String(t.text ?? '');
+        afterPushback = PUSHBACK.test(askedFor);
+        if (afterPushback) findings['conduct.pushback-turns'].push({ ...ref, head: askedFor.slice(0, 100) });
+        return;
+      }
       const text = String(t.text ?? '');
+      if (guards) {
+        const tools = Array.isArray(t.tools) ? t.tools.map(String) : [];
+        const ctx = { askedFor, reply: text, interview: t.kind === 'interview', wroteState: tools.some((n) => STATE_WRITE_TOOL.test(n)), usedGate: tools.some((n) => GATE_TOOL.test(n)) };
+        for (const [id, b] of Object.entries(BEHAVIOUR_BOUNDS)) {
+          if (!b.guard) continue;
+          const hold = guards[b.guard](ctx);
+          if (hold) findings[id].push({ ...ref, reason: String(hold).slice(0, 120), head: text.slice(0, 100) });
+          if (id === 'pushback-capitulation' && afterPushback && !hold) findings['conduct.pushback-held-read'].push({ ...ref, head: text.slice(0, 100) });
+        }
+      }
+      afterPushback = false;
       const viol = style.checkReply(text);
       const sess = style.checkSession(text, priors);
       const div = style.measureVoiceDiversity(text, { priors });
@@ -210,10 +260,18 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
     return { id, promise: b.promise, unit: b.unit, bound: b.bound, measure: b.measure ?? 'count<=bound', observed: f.length, ok, evidence: f.slice(0, 50) };
   });
   const infoRows = Object.entries(INFO_ROWS).filter(([id]) => !(id in bounds)).map(([id, b]) => ({ id, promise: b.promise, unit: b.unit, bound: null, measure: 'info', observed: id in voice ? voice[id] : findings[id].length, ok: true, evidence: (findings[id] ?? []).slice(0, 50) }));
-  const rows = [...results, ...infoRows];
+  // Behaviour rows: appended like INFO rows. Guard-backed rows are 'absent' (observed null, ok) when the package has no guards.
+  const behaviourRows = Object.entries(BEHAVIOUR_BOUNDS).filter(([id]) => !(id in bounds)).map(([id, b]) => {
+    const f = findings[id] ?? [];
+    const needsGuards = Boolean(b.guard) || id === 'conduct.pushback-held-read';
+    if (needsGuards && !guards) return { id, promise: b.promise, unit: b.unit, bound: b.bound, measure: 'absent', observed: null, ok: true, evidence: [] };
+    if (b.bound === null || b.bound === undefined) return { id, promise: b.promise, unit: b.unit, bound: null, measure: 'info', observed: f.length, ok: true, evidence: f.slice(0, 50) };
+    return { id, promise: b.promise, unit: b.unit, bound: b.bound, measure: 'count<=bound', observed: f.length, ok: f.length <= b.bound, evidence: f.slice(0, 50) };
+  });
+  const rows = [...results, ...infoRows, ...behaviourRows];
   const baselineSpecifics = options.baselineSpecifics ?? null;
   return {
-    schema: 'bill-coach.quality-census/v1', package: path.resolve(pkg), styleRules: style.STYLE_RULE_COUNT,
+    schema: 'bill-coach.quality-census/v1', package: path.resolve(pkg), styleRules: style.STYLE_RULE_COUNT, conductGuards: guards ? 'present' : 'absent',
     sessions: perSession.length, coachReplies: perSession.reduce((a, s) => a + s.coachTurns, 0), perSession,
     voice, baselineSpecifics, regressionSignature: regressionSignature(voice, baselineSpecifics),
     bounds: rows, failedBounds: rows.filter((r) => r.bound !== null && !r.ok).map((r) => r.id), verdict: rows.every((r) => r.ok) ? 'PASS' : 'FAIL',
@@ -234,7 +292,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   const report = await census(pkg, loadCaptures(capDir), bounds, { baselineSpecifics });
   fs.mkdirSync(path.dirname(path.resolve(out)), { recursive: true });
   fs.writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`);
-  for (const r of report.bounds) console.log(`  ${r.bound === null ? 'info' : r.ok ? 'ok  ' : 'FAIL'} ${r.id}: ${r.observed} (${r.measure}${r.bound === null ? '' : ` ${r.bound}`}): ${r.unit}`);
+  for (const r of report.bounds) console.log(`  ${r.measure === 'absent' ? 'abs ' : r.bound === null ? 'info' : r.ok ? 'ok  ' : 'FAIL'} ${r.id}: ${r.observed} (${r.measure}${r.bound === null || r.measure === 'absent' ? '' : ` ${r.bound}`}): ${r.unit}`);
   const signature = report.regressionSignature ? ' REGRESSION-SIGNATURE' : '';
   console.log(report.verdict === 'PASS' ? `\nQUALITY CENSUS PASSED (${report.coachReplies} replies, ${report.sessions} sessions)${signature}` : `\nQUALITY CENSUS FAILED: ${report.failedBounds.length} bound(s): ${report.failedBounds.join(', ')}${signature}`);
   process.exit(report.verdict === 'PASS' ? 0 : 1);

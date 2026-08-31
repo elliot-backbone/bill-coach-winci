@@ -177,6 +177,28 @@ function rowDelta(beforeFile, afterFile) {
 
 // ---------------------------------------------------------------- one claude turn = one process
 let turnNo = 0;
+// H8 (2.1.3 re-test): SessionStart and PostCompact hooks do not fire in `claude -p` (measured 2026-08-31: no hook
+// context in any lane transcript), so the session-start contract the product injects at every interactive
+// session start never reached the model in the lanes. Reproduce it the way the launcher would: run the hook
+// once per unit and append its additionalContext to the system prompt file the coach lane already passes.
+let SESSION_START_FILE = null;
+function sessionStartPromptFile() {
+  if (SESSION_START_FILE !== null) return SESSION_START_FILE;
+  SESSION_START_FILE = false;
+  try {
+    const hook = spawnSync(process.execPath, [path.join(DATA, 'runtime', 'lifecycle.mjs'), 'hook-session-start'], { input: '{}', env: { ...process.env, BILL_COACH_DATA_DIR: DATA }, encoding: 'utf8', timeout: 60000, windowsHide: true });
+    const out = JSON.parse(hook.stdout || '{}');
+    const context = out?.hookSpecificOutput?.additionalContext;
+    fs.writeFileSync(path.join(dirs.turns, 'session-start.hook.json'), JSON.stringify({ exit: hook.status, stdout: hook.stdout, stderr: hook.stderr }, null, 2));
+    if (typeof context === 'string' && context.trim()) {
+      const base = fs.existsSync(SYSTEM_PROMPT) ? fs.readFileSync(SYSTEM_PROMPT, 'utf8') : '';
+      const combined = path.join(dirs.turns, 'system-prompt.with-session-start.md');
+      fs.writeFileSync(combined, `${base}\n\n${context}\n`);
+      SESSION_START_FILE = combined;
+    }
+  } catch (e) { fs.writeFileSync(path.join(dirs.turns, 'session-start.hook.json'), JSON.stringify({ error: e.message })); }
+  return SESSION_START_FILE;
+}
 function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   turnNo += 1;
   const tag = `turn-${String(turnNo).padStart(2, '0')}`;
@@ -186,7 +208,7 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   fs.writeFileSync(`${base}.prompt.txt`, prompt);
   const mcpLog = path.join(dirs.mcp, `${unitKey}-${tag}.jsonl`);
   const args = lane === 'coach'
-    ? ['-p', '--setting-sources', 'user', '--tools', 'WebSearch,WebFetch', ...(fs.existsSync(SYSTEM_PROMPT) ? ['--append-system-prompt-file', SYSTEM_PROMPT] : []), '--output-format', 'stream-json', '--verbose', '--debug', ...(cont ? ['--continue'] : [])]
+    ? ['-p', '--setting-sources', 'user', '--tools', 'WebSearch,WebFetch', ...((sessionStartPromptFile() || (fs.existsSync(SYSTEM_PROMPT) ? SYSTEM_PROMPT : null)) ? ['--append-system-prompt-file', sessionStartPromptFile() || SYSTEM_PROMPT] : []), '--output-format', 'stream-json', '--verbose', '--debug', ...(cont ? ['--continue'] : [])]
     : ['-p', '--setting-sources', 'user', '--strict-mcp-config', '--mcp-config', NO_MCP, '--output-format', 'stream-json', '--verbose'];
   const env = sealedEnv({ NODE_OPTIONS: `--import ${JSON.stringify(new URL('mcp-tap.mjs', import.meta.url).href)}`.replace(/"/g, ''), MCP_TAP_LOG: mcpLog });
   const before = snapshot(`${tag}.before`);

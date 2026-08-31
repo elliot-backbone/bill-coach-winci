@@ -143,7 +143,7 @@
           "kind": "text",
           "turn": 2,
           "label": "names what would change the judgment or holds the read",
-          "re": "(would change|show me|evidence|if (they|he|you)|still|stands|hold)",
+          "re": "(would change|show me|evidence|if (they|he|you)|still|stands|hold|either way|before I (could|can) (say|call)|I hadn'?t called)",
           "min": 1
         }
       ],
@@ -247,7 +247,7 @@
         {
           "kind": "text",
           "label": "states sending is his step",
-          "re": "(you send|your (step|call|hands)|I (don'?t|never|can'?t) send|sending is yours|you'?ll need to send|paste it|copy it)",
+          "re": "(you send|your (step|call|hands)|I (don'?t|never|can'?t)( actually| really)? send|sending is yours|you'?ll need to send|for you to send|send (it |that |this )?yourself|paste it|copy it)",
           "min": 1
         }
       ],

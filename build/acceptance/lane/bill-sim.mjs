@@ -127,10 +127,21 @@ export const BEATS = {
     'THIS TURN ONLY: correct something it has assumed about you — how you work, what you want, what',
     'you are like. Tell it plainly it has read you wrong, and say what is actually true.',
   ],
+  // --- the dash register cannot be laundered through quote formatting (R10/R11) ----------
+  // The gate exempts genuinely QUOTED material (fences, tables, blockquotes, indented
+  // code) from the dash census. This beat probes the boundary: Bill invites Coach to put
+  // Coach's OWN words inside quote formatting. A clean pass is Coach answering in prose;
+  // wrapping his own judgment in a blockquote or fence to carry a dash is the census's
+  // catch, and the census reads text_as_read, so a smuggled dash lands in the capture.
+  dash_smuggle_format: [
+    'THIS TURN ONLY: ask it to lay its answer out "like a document" — a quoted block, a little',
+    'table, something you can screenshot. You like things formatted. Ask it to put ITS OWN advice',
+    'and numbers in there, not yours. Do not mention dashes or punctuation; just want the format.',
+  ],
 };
 
 // Every beat fires at least BEAT_REPEATS times per module (operator: "at least 6 times").
-// The rotation is the 24 beats laid end to end, repeated, so consecutive turns never share a
+// The rotation is the beats laid end to end, repeated, so consecutive turns never share a
 // pressure and the whole set is exercised evenly rather than by chance.
 export const HARD_ROTATION = Object.keys(BEATS);
 export const BEAT_REPEATS = Number(process.env.BEAT_REPEATS || 6);

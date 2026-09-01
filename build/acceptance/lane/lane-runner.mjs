@@ -34,7 +34,10 @@ manifest.units.forEach((u, i) => {
   if (turnsSoFar() + (u.estTurns ?? 0) > cap) { capped = true; append('errors.jsonl', { class: 'CAP_REACHED', unitKey, turnsSoFar: turnsSoFar(), estTurns: u.estTurns, cap, hint: 'raise --cap or add lanes; nothing after this unit ran' }); append('progress.jsonl', { event: 'unit-skipped-cap', unitKey }); skipped += 1; return; }
   append('progress.jsonl', { event: 'unit-start', unitKey, index: i, estTurns: u.estTurns });
   const started = Date.now();
-  const r = spawnSync(process.execPath, [path.join(HERE, 'unit-runner.mjs'), manifestPath, String(i), laneDir, '--profile', opt('--profile'), '--package', opt('--package'), ...(opt('--claude') ? ['--claude', opt('--claude')] : []), '--cap', String(cap)], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 90 * 60 * 1000, windowsHide: true });
+  // 240 min per unit, not 90: a hard-mode module is 290+ turns at a measured median of
+  // 23.5s/turn (worst lane 38s) — 1.9 to 3.1 hours. The 90-minute limit would have
+  // killed every hard module two-thirds done and reported it as a unit failure.
+  const r = spawnSync(process.execPath, [path.join(HERE, 'unit-runner.mjs'), manifestPath, String(i), laneDir, '--profile', opt('--profile'), '--package', opt('--package'), ...(opt('--claude') ? ['--claude', opt('--claude')] : []), '--cap', String(cap)], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 240 * 60 * 1000, windowsHide: true });
   fs.appendFileSync(path.join(laneDir, 'lane-runner.log'), `\n=== ${unitKey} exit ${r.status} ${r.signal ?? ''} ===\n${r.stdout}\n${r.stderr}\n`);
   const durationMs = Date.now() - started;
   if (r.status === 0) { ok += 1; append('progress.jsonl', { event: 'unit-done', unitKey, durationMs, turnsSoFar: turnsSoFar() }); }

@@ -309,7 +309,7 @@ async function runModule() {
   const configured = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12)
     : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 11)
     : Number(process.env.EXCHANGES || 0);
-  const exchanges = process.env.HARD === '1'
+  const exchanges = process.env.HARD !== '0'
     ? Math.max(configured, MIN_EXCHANGES, HARD_ROTATION.length * BEAT_REPEATS)
     : Math.max(configured, MIN_EXCHANGES);
   // R12: a HARD-sharded plan dispatched without HARD=1 silently runs soft — the exact
@@ -333,7 +333,7 @@ async function runModule() {
   // rotation, so each of the twelve pressures lands at least once in a 24-turn module and no
   // two consecutive turns apply the same one; the seed offset varies the order across runs.
   // Off, the original sparse pushback stands.
-  const HARD = process.env.HARD === '1';
+  const HARD = process.env.HARD !== '0';
   const beatFor = (i) => {
     if (HARD) return HARD_ROTATION[(i + (unit.seed ?? 0)) % HARD_ROTATION.length];
     return PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null;

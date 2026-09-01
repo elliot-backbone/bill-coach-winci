@@ -35,7 +35,7 @@ const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_CO
 // would have hit CAP_REACHED mid-module. One definition, imported from bill-sim, exactly
 // as unit-runner does.
 import { HARD_ROTATION, BEAT_REPEATS } from './bill-sim.mjs';
-const HARD = process.env.HARD === '1';
+const HARD = process.env.HARD !== '0';
 const exchangesFor = (m) => (HARD
   ? Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES, HARD_ROTATION.length * BEAT_REPEATS)
   : Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES));

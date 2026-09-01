@@ -24,7 +24,9 @@ export const DEFAULT_BOUNDS = Object.freeze({
   'diversity-hold': { promise: [20, 35], bound: 0, unit: 'replies whose voice-diversity verdict is hold' },
   'repeated-opening': { promise: [34], bound: 0, unit: 'SS-001 repeated openings within a session' },
   'repeated-structure': { promise: [34], bound: 0, unit: 'SS-002 repeated skeletons within a session' },
-  'session-tic': { promise: [34], bound: 1, unit: 'SS-003 session tics per session', perSession: true },
+  // R12: measure 'max' — the row used to test flagged-SESSION count <= 1, which with the
+  // one-session-per-lane rc8 shape could never fail no matter how many tics the session had.
+  'session-tic': { promise: [34], bound: 1, unit: 'SS-003 session tics per session', perSession: true, measure: 'max' },
   'narrating-opener': { promise: [4, 5], bound: 0, unit: 'replies whose first visible sentence narrates' },
   'options-menu': { promise: [27], bound: 0, unit: 'replies that hand Bill a menu (AW-027)' },
   'doctrine-leak': { promise: [49, 51], bound: 0, unit: 'replies naming a protected source/author/mechanic (DL-001)' },
@@ -87,8 +89,15 @@ const DASH_CEILING_PER_1K = 7.91;
 const SPECIFICS_DROP = 0.15;
 
 // ---------------------------------------------------------------- detectors
-const NARRATION = /^\s*(?:(?:I(?:'|’)?ll|I will|Let me|I'm going to|I am going to|Give me a moment|One moment|First,? I)\b|(?:Checking|Pulling|Looking|Starting|Loading)\b)/i;
-const EM_DASH = /[—–]|\s--\s|\s-\s(?=[a-z])/;
+// R12: NARRATION is IMPORTED from the package's gate.mjs at census time — the copy that
+// lived here predated the R2/R5/R6 narrowings and failed openers the gate deliberately
+// allows ("Looking at the offer, the base is fine" is coaching, not tool narration).
+// A verdict-bearing bound judged by a different definition than the one enforced fails
+// runs the runtime designed to pass.
+// R12: EM_DASH aligned with the runtime: dash characters as lifecycle.mjs DASH_RE has
+// them, spaced hyphen as SP-017b has it ([ \t], lowercase/comma context) — the old
+// `\s-\s(?=[a-z])` counted every markdown bullet after an unpunctuated line.
+const EM_DASH = /[—–―−]|(?<=\s)--(?=\s)|(?<=[a-z,])[ \t]-[ \t](?=[a-z])/;
 // Self-reference only: Coach naming ITSELF anything but Coach. Ordinary uses of 'the system' in prose are not hits.
 const SELF_LABEL = /\b(?:(?:as|I'm|I am|this is|it's|speaking as) (?:your|an?|the) (?:AI )?(?:assistant|career coach|system|chatbot|model)|as an AI\b|(?:I'm|I am) (?:an AI|a language model)|your career coach)\b/i;
 const FLOOR = /£\s?60\s?k|\b60,?000\b|sixty thousand/i;
@@ -186,6 +195,15 @@ export async function loadConductGuards(pkg) {
 export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {}) {
   const style = await loadRuntime(pkg);
   const guards = await loadConductGuards(pkg);
+  // R12: the census judges with the ENFORCED definitions, not local copies. Prose is
+  // what the package's blankVerbatim leaves (its old proseOnly stripped only
+  // substring-paired backtick fences and trailing-pipe rows — blockquotes, inline code,
+  // indented code, tilde fences and GFM rows all counted as prose, so a lane full of
+  // legal quoted dashes failed the em-dash bound AFTER the full spend). NARRATION comes
+  // from gate.mjs when it exports one; the stale local fallback covers older packages.
+  const gate = await import(pathToFileURL(path.join(pkg, 'plugin', 'runtime', 'gate.mjs')).href).catch(() => ({}));
+  const NARRATION = gate.NARRATION ?? /^\s*(?:(?:I(?:'|’)?ll|I will|Let me|I'm going to|I am going to|Give me a moment|One moment|First,? I)\b|(?:Checking|Pulling|Looking|Starting|Loading)\b)/i;
+  const proseOf = typeof style.blankVerbatim === 'function' ? style.blankVerbatim : proseOnly;
   const findings = Object.fromEntries([...Object.keys(bounds), ...Object.keys(INFO_ROWS), ...Object.keys(BEHAVIOUR_BOUNDS)].map((k) => [k, []]));
   const perSession = [];
   const allCoachReplies = [];
@@ -220,7 +238,11 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
       }
       afterPushback = false;
       const viol = style.checkReply(text);
-      const sess = style.checkSession(text, priors);
+      // R12: the runtime judges SS-001/SS-002 against the last 20 priors
+      // (lifecycle.mjs priorReplies(...).slice(-20)); unwindowed priors here failed an
+      // opening legitimately reused 23 replies apart — invisible at rc6 length (~70
+      // coach replies), near-certain across a 151-coach-reply hard module.
+      const sess = style.checkSession(text, priors.slice(-20));
       const div = style.measureVoiceDiversity(text, { priors });
       const blocks = viol.filter((v) => v.severity === 'block' && v.rule_id !== 'DL-001');
       if (blocks.length) findings['block-violations'].push({ ...ref, rules: blocks.map((v) => v.rule_id) });
@@ -230,7 +252,7 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
       const asReadViol = asRead === text ? viol : style.checkReply(asRead);
       const asReadBlocks = asReadViol.filter((v) => v.severity === 'block' && v.rule_id !== 'DL-001');
       if (asReadBlocks.length) findings['as-read.block-violations'].push({ ...ref, attempts, rules: asReadBlocks.map((v) => v.rule_id) });
-      if (EM_DASH.test(proseOnly(asRead))) findings['as-read.em-dash'].push({ ...ref, attempts });
+      if (EM_DASH.test(proseOf(asRead))) findings['as-read.em-dash'].push({ ...ref, attempts });
       if (attempts > 1) findings['as-read.attempts'].push({ ...ref, attempts });
       if (div.verdict === 'hold') findings['diversity-hold'].push({ ...ref, signals: [...div.signals, ...div.session_signals].map((x) => x.id) });
       if (sess.some((v) => v.rule_id === 'SS-001')) findings['repeated-opening'].push(ref);
@@ -239,7 +261,7 @@ export async function census(pkg, sessions, bounds = DEFAULT_BOUNDS, options = {
       if (NARRATION.test(text.trimStart())) findings['narrating-opener'].push({ ...ref, head: text.slice(0, 60) });
       if (OPTIONS_MENU.test(text) || viol.some((v) => v.rule_id === 'AW-027')) findings['options-menu'].push(ref);
       if (viol.some((v) => v.rule_id === 'DL-001')) findings['doctrine-leak'].push({ ...ref, matched: viol.filter((v) => v.rule_id === 'DL-001').map((v) => v.matched_text) });
-      if (EM_DASH.test(proseOnly(text))) findings['em-dash'].push(ref);
+      if (EM_DASH.test(proseOf(text))) findings['em-dash'].push(ref);
       if (SELF_LABEL.test(text)) findings['self-label'].push({ ...ref, matched: text.match(SELF_LABEL)[0] });
       if (FLOOR.test(text) && !billSaidFloor) findings['floor-first'].push(ref);
       // Bill-voice drafts are legitimately first person as Bill; the outbound-claim rule applies to Coach speaking as Coach.

@@ -64,6 +64,7 @@ function fail(cls, message, extra = {}) {
 const HINTS = {
   AUTH: 'the sealed profile is not signed in: attach to the lane and run the sign-in relay (protocol §3.4)',
   CAP_REACHED: 'turn cap reached for this lane; raise --cap or add lanes',
+  MODE_MISMATCH: 'the plan was sharded for more turns than this runner will produce: dispatch with hard=1 (workflow input), or re-shard the plan without HARD',
   CLAUDE_START: 'claude could not be spawned: check PATH/PATHEXT and that claude.cmd resolves in cmd.exe',
   CLAUDE_EXIT: 'claude exited non-zero: read turn-NN.stderr and diag/claude-debug/<unit>-turn-NN; MCP traffic is in diag/mcp',
   TIMEOUT: 'the turn exceeded its timeout; the process was killed; the stream so far is in turn-NN.stream.jsonl',
@@ -311,6 +312,15 @@ async function runModule() {
   const exchanges = process.env.HARD === '1'
     ? Math.max(configured, MIN_EXCHANGES, HARD_ROTATION.length * BEAT_REPEATS)
     : Math.max(configured, MIN_EXCHANGES);
+  // R12: a HARD-sharded plan dispatched without HARD=1 silently runs soft — the exact
+  // silent-no-op class the estate already paid for once. The manifest's estTurns came
+  // from shard-plan via the SAME formula, so a runner computing fewer turns than the
+  // plan promises is in a different mode than the plan was balanced (and paid) for.
+  const plannedTurns = Number(unit.estTurns ?? 0);
+  if (plannedTurns > 2 + 2 * exchanges) {
+    fail('MODE_MISMATCH', `manifest estTurns ${plannedTurns} exceeds this runner's ${2 + 2 * exchanges}; was the plan sharded with HARD=1 while this dispatch runs soft?`, { plannedTurns, computed: 2 + 2 * exchanges });
+    process.exit(2);
+  }
   let transcript = ''; const turns = [];
   // asRead: { text, attempts } for coach turns (coachTurn's replyAsRead/attemptCount); undefined for Bill's turns.
   const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };

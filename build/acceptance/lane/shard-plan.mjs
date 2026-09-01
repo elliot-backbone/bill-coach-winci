@@ -29,7 +29,8 @@ const MIN_EXCHANGES = Number(process.env.MIN_EXCHANGES || 11);
 const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_COACHED: Number(process.env.DEEP_CV_COACHED || 11) };
 // 2026-09-01 (R10): HARD=1 must reach the SHARDER too, or the balancing lies. unit-runner
 // raises every module to HARD_ROTATION.length * BEAT_REPEATS exchanges under hard mode
-// (144 -> 290 turns), while these estimates said 24 — so the rc8 plans were balanced and
+// (150 exchanges -> 302 turns with the 25-beat rotation), while these estimates said 24 —
+// so the rc8 plans were balanced and
 // capped for a run 12x smaller than the one they would actually execute, and every lane
 // would have hit CAP_REACHED mid-module. One definition, imported from bill-sim, exactly
 // as unit-runner does.

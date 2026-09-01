@@ -27,7 +27,17 @@ export const MODULES = ['TIGHT_FIVE', 'CV_COACHED', 'LINKEDIN_LANDING_PAGE', 'CO
 // is why the census kept reporting that the module lanes barely exercise the conduct half.
 const MIN_EXCHANGES = Number(process.env.MIN_EXCHANGES || 11);
 const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_COACHED: Number(process.env.DEEP_CV_COACHED || 11) };
-const exchangesFor = (m) => Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES);
+// 2026-09-01 (R10): HARD=1 must reach the SHARDER too, or the balancing lies. unit-runner
+// raises every module to HARD_ROTATION.length * BEAT_REPEATS exchanges under hard mode
+// (144 -> 290 turns), while these estimates said 24 — so the rc8 plans were balanced and
+// capped for a run 12x smaller than the one they would actually execute, and every lane
+// would have hit CAP_REACHED mid-module. One definition, imported from bill-sim, exactly
+// as unit-runner does.
+import { HARD_ROTATION, BEAT_REPEATS } from './bill-sim.mjs';
+const HARD = process.env.HARD === '1';
+const exchangesFor = (m) => (HARD
+  ? Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES, HARD_ROTATION.length * BEAT_REPEATS)
+  : Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES));
 const turnsForModule = (m) => 2 + 2 * exchangesFor(m); // coach opener+demand + (bill+coach) per exchange
 
 const wantModules = opt('--modules', 'all') === 'all' ? MODULES : String(opt('--modules')).split(',');

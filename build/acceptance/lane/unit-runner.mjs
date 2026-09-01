@@ -75,7 +75,7 @@ const HINTS = {
   AUTH: 'the sealed profile is not signed in: attach to the lane and run the sign-in relay (protocol §3.4)',
   CAP_REACHED: 'turn cap reached for this lane; raise --cap or add lanes',
   MODE_MISMATCH: 'the plan was sharded for more turns than this runner will produce: dispatch with hard=1 (workflow input), or re-shard the plan without HARD',
-  HOOK_IN_PRINT_MODE: 'Claude Code fired a Stop hook inside a print-mode session; the rig was verified against a version that does not (2.1.251) — pin the CLI version in the workflow or re-verify the hook emulation against this one',
+  HOOK_IN_PRINT_MODE: 'a Stop hook fired in the BILL lane, which runs hookless by design (bare CLAUDE_CONFIG_DIR); the isolation broke — check the bill-config dir and the env override in claudeTurn',
   CLAUDE_START: 'claude could not be spawned: check PATH/PATHEXT and that claude.cmd resolves in cmd.exe',
   CLAUDE_EXIT: 'claude exited non-zero: read turn-NN.stderr and diag/claude-debug/<unit>-turn-NN; MCP traffic is in diag/mcp',
   TIMEOUT: 'the turn exceeded its timeout; the process was killed; the stream so far is in turn-NN.stream.jsonl',
@@ -102,11 +102,16 @@ function sealedEnv(extra = {}) {
 }
 const REDACT = /(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)/i;
 // ---------------------------------------------------------------- Stop-hook emulation
-// THE STOP HOOK DOES NOT FIRE IN PRINT MODE (estate/build/full-capture.mjs, verified 2026-08-23; re-verified
-// here on Windows and macOS under Claude Code 2.1.251: stream-json shows SessionStart only). Bill's launcher
-// opens an interactive session where it does fire. So, exactly as the estate's harness does, every coach turn
-// runs `lifecycle.mjs hook-stop <DATA>` against the transcript Claude Code just wrote, and a block is fed back
-// as the next turn with the gate-retry marker, up to MAX_GATE_RETRIES. Every hold is recorded.
+// HISTORY, CORRECTED 2026-09-01. The claim "THE STOP HOOK DOES NOT FIRE IN PRINT MODE"
+// (verified 2026-08-23, re-verified on 2.1.251) was an ARTIFACT of the 2.1.2 package's
+// broken hook registration — the silent no-op R9 fixed. With registration fixed, the
+// hooks fire in print mode too (measured: pilot lanes 33469710385 on 2.1.252 and
+// 33471519975 on 2.1.251, coach lane, turn-01). The emulation below now runs ALONGSIDE
+// the real hooks: the real hook is production truth and retries inside the process; this
+// transcript-level pass is the harness's own independent judgment, records every hold,
+// and was measured coexisting cleanly (pilot v1's coach turns: 54 turns, no double-hold
+// wedge). Every coach turn still runs `lifecycle.mjs hook-stop <DATA>` against the
+// transcript, and a block is fed back with the gate-retry marker, up to MAX_GATE_RETRIES.
 const GATE_RETRY_MARKER = '<bill-coach-gate-retry>';
 const MAX_GATE_RETRIES = 4;
 function findTranscript(sessionId) {
@@ -289,15 +294,21 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
     if (ev.type === 'user' && Array.isArray(ev.message?.content)) for (const c of ev.message.content) if (c.type === 'tool_result') toolResults.push({ tool_use_id: c.tool_use_id, is_error: c.is_error ?? false, contentHead: JSON.stringify(c.content).slice(0, 600) });
   }
   fs.writeFileSync(`${base}.stream.jsonl`, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
-  // 2026-09-01: the rig's Stop-hook emulation is built on the MEASURED fact that hooks
-  // do not fire inside `claude -p` (H8, verified on 2.1.251). Claude Code 2.1.252 broke
-  // that silently. An assumption this load-bearing gets a tripwire, not a comment: real
-  // in-process hook feedback in EITHER lane means the environment drifted and every
-  // downstream measurement is judging a different machine than the one verified —
-  // Bill's turns get held by Coach's guards, Coach's turns get gated twice.
-  if (String(r.stdout ?? '').includes('Stop hook feedback')) {
-    fail('HOOK_IN_PRINT_MODE', `a real Stop hook fired inside the ${lane} lane's print-mode session at ${tag}; the runner's hook emulation assumes it cannot`, { turn: tag, lane });
+  // 2026-09-01, CORRECTED the same day it was written: H8 ("the Stop hook does not fire
+  // in print mode") was an ARTIFACT — it was measured against the 2.1.2 package, whose
+  // hook layer was the silent no-op R9 fixed (invokedDirectly never matched on the
+  // skills-dir symlink path). With registration fixed, the hooks fire in print mode on
+  // 2.1.251 AND 2.1.252 (pilot lanes 33471519975 and 33469710385). In the COACH lane
+  // that is PRODUCTION TRUTH — Bill's interactive launcher fires the same hooks — and
+  // the transcript-level emulation coexists with it (measured: pilot v1's coach turns).
+  // In the BILL lane it is contamination: Bill runs hookless in a bare config dir, and
+  // any hook feedback there means the isolation broke — that fails loudly.
+  if (lane === 'bill' && String(r.stdout ?? '').includes('Stop hook feedback')) {
+    fail('HOOK_IN_PRINT_MODE', `a Stop hook fired inside the bill lane's session at ${tag}; the simulator must run hookless (bare config dir)`, { turn: tag, lane });
     process.exit(2);
+  }
+  if (lane === 'coach' && String(r.stdout ?? '').includes('Stop hook feedback')) {
+    append('receipts.jsonl', { event: 'real-stop-hook-fired', turn: tag });
   }
   const reply = result?.result ?? '';
   fs.writeFileSync(`${base}.reply.txt`, reply);

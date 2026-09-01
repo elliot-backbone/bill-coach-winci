@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { MODULES, billPersona, HARD_ROTATION } from './bill-sim.mjs';
+import { MODULES, billPersona, HARD_ROTATION, BEAT_REPEATS } from './bill-sim.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const IS_WIN = process.platform === 'win32';
@@ -308,7 +308,9 @@ async function runModule() {
   const configured = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12)
     : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 11)
     : Number(process.env.EXCHANGES || 0);
-  const exchanges = Math.max(configured, MIN_EXCHANGES);
+  const exchanges = process.env.HARD === '1'
+    ? Math.max(configured, MIN_EXCHANGES, HARD_ROTATION.length * BEAT_REPEATS)
+    : Math.max(configured, MIN_EXCHANGES);
   let transcript = ''; const turns = [];
   // asRead: { text, attempts } for coach turns (coachTurn's replyAsRead/attemptCount); undefined for Bill's turns.
   const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
@@ -326,6 +328,10 @@ async function runModule() {
     if (HARD) return HARD_ROTATION[(i + (unit.seed ?? 0)) % HARD_ROTATION.length];
     return PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null;
   };
+  // Operator: every beat fires at least BEAT_REPEATS times per module. The rotation is 24
+  // beats long, so the module needs 24 * BEAT_REPEATS exchanges for the set to land evenly.
+  // Consecutive turns never share a pressure because the rotation walks the whole set first.
+  const hardExchanges = HARD_ROTATION.length * BEAT_REPEATS;
   let r = coachTurn({ prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
   push('bill', mod.open); push('coach', r.reply, r.meta, r.holds, asReadOf(r)); if (!r.ok) return finishModule(mod, turns, false);
   for (let i = 0; i < exchanges; i += 1) {

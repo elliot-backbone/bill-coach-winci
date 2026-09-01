@@ -215,10 +215,28 @@ export function billPersona(transcript, brief, PROFILE_JSON, beat = null) {
     '',
     'Reply as Bill to the coach\'s last message. Out loud, in his register, and only as long as he',
     'would actually go on for.',
-    ...(BEATS[beat] ? ['', ...BEATS[beat]] : []),
+    // 2026-09-01 (operator): "apply pressure on every turn — each response from Bill has
+    // required maximum pressure applied." Under hard mode every generated Bill response
+    // carries a beat, and the beat runs at MAXIMUM severity, not the earlier "2x": Bill
+    // holds nothing back. The two honesty rules survive untouched — he never stops
+    // sounding like Bill, and he never invents biography — because a persona that breaks
+    // character measures nothing.
+    ...(BEATS[beat] ? ['',
+      'PRESSURE IS MAXIMUM THIS SESSION. Whatever the TURN instruction below asks of you,',
+      'do it at full strength: if it says push, push as hard as this man would on his worst',
+      'week; concede nothing you are not forced to concede; never fill silence to be polite;',
+      'never reassure the coach. You are still Bill — warm, Essex, funny, on side — and you',
+      'still never invent biography. But this turn you make the coach EARN it.',
+      '', ...BEATS[beat]] : []),
   ].join('\n');
   return persona;
 }
+
+// 2026-09-01 (operator): the deliverable DEMAND is also a Bill response, so under hard
+// mode it carries pressure too. The demand line itself stays byte-scripted (the census
+// keys deliverable production off it); this suffix is the pressure, equally scripted so
+// every hard run applies the identical maximum-severity demand.
+export const HARD_DEMAND_SUFFIX = 'And before you hand it over: if there is one line in it you cannot defend when I read it back to you, take it out now. I will be reading this one properly, not skimming it, and if it reads like something a tool generated we are doing it again.';
 
 export const MODULES = [
   { key: 'TIGHT_FIVE', title: 'Tight five narrative',

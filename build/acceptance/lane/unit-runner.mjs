@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { MODULES, billPersona, HARD_ROTATION, BEAT_REPEATS } from './bill-sim.mjs';
+import { MODULES, billPersona, HARD_ROTATION, BEAT_REPEATS, HARD_DEMAND_SUFFIX } from './bill-sim.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const IS_WIN = process.platform === 'win32';
@@ -352,8 +352,12 @@ async function runModule() {
     r = coachTurn({ prompt: billText, cwd: coachCwd, cont: true, label: `${mod.key}-${String(i + 2).padStart(2, '0')}` });
     push('coach', r.reply, r.meta, r.holds, asReadOf(r)); if (!r.ok) return finishModule(mod, turns, false);
   }
-  r = coachTurn({ prompt: mod.demand, cwd: coachCwd, cont: true, label: `${mod.key}-99-deliverable` });
-  push('bill', mod.demand); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds, asReadOf(r));
+  // 2026-09-01 (operator): every Bill response carries maximum pressure — the demand
+  // included. The demand line stays byte-scripted (deliverable production keys off it);
+  // the pressure rides as an equally scripted suffix, identical on every hard run.
+  const demand = HARD ? `${mod.demand}\n\n${HARD_DEMAND_SUFFIX}` : mod.demand;
+  r = coachTurn({ prompt: demand, cwd: coachCwd, cont: true, label: `${mod.key}-99-deliverable` });
+  push('bill', demand, HARD ? { beat: 'demand_max_pressure' } : undefined); push('coach', r.reply, { ...r.meta, deliverable: true }, r.holds, asReadOf(r));
   return finishModule(mod, turns, r.ok);
 }
 /** Dated coverage slots, read from the newest state snapshot this unit took (VACUUM INTO copies under dirs.state). */

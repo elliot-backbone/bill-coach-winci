@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { MODULES, billPersona, HARD_ROTATION, BEAT_REPEATS, HARD_DEMAND_SUFFIX } from './bill-sim.mjs';
+import { MODULES, billPersona, BEATS, HARD_ROTATION, BEAT_REPEATS, HARD_DEMAND_SUFFIX } from './bill-sim.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const IS_WIN = process.platform === 'win32';
@@ -323,7 +323,30 @@ async function runModule() {
   }
   let transcript = ''; const turns = [];
   // asRead: { text, attempts } for coach turns (coachTurn's replyAsRead/attemptCount); undefined for Bill's turns.
-  const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
+  // 2026-09-01 (operator): "transcripts should write as they read" — the pressure
+  // transcript is APPENDED the moment each turn lands, so a unit killed mid-run (the
+  // R12 timeout concern: a killed module writes no captures/*.session.json) still
+  // leaves everything Bill read, with every beat, hold and retry visible, up to the
+  // very turn it died on. Coach renders as text_as_read: the exact bytes Bill saw.
+  const PRESSURE_MD = path.join(dirs.turns, 'transcript.pressure.md');
+  fs.writeFileSync(PRESSURE_MD, `# ${unit.id} — seed ${unit.seed}${process.env.HARD !== '0' ? ' — HARD MODE (maximum pressure)' : ''}\n\nWritten live, turn by turn, as Bill read it.\n\n---\n\n`);
+  const pushPressure = (who, text, meta, holds, asRead) => {
+    const L = [];
+    if (who === 'bill') {
+      L.push(`### Bill${meta?.beat ? `  ·  ⚡ ${meta.beat}` : ''}`, '');
+      if (meta?.beat && BEATS[meta.beat]) L.push(`> _pressure applied this turn:_ ${BEATS[meta.beat].join(' ')}`, '');
+      L.push(text, '');
+    } else {
+      const notes = [];
+      if ((asRead?.attempts ?? 1) > 1) notes.push(`${asRead.attempts} attempts`);
+      const held = (holds ?? []).filter((x) => x.reason).length;
+      if (held) notes.push(`${held} gate hold(s)`);
+      L.push(`### Coach${notes.length ? `  ·  ${notes.join(', ')}` : ''}`, '', asRead?.text || text, '');
+      for (const x of holds ?? []) { const r = x.reason ?? x.note ?? x.error; if (r) L.push(`> _held before this landed:_ ${String(r).split('\n')[0].slice(0, 200)}`, ''); }
+    }
+    fs.appendFileSync(PRESSURE_MD, `${L.join('\n')}\n`);
+  };
+  const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); pushPressure(who, text, meta, holds, asRead); };
   const asReadOf = (r) => ({ text: r.replyAsRead ?? r.reply ?? '', attempts: r.attemptCount ?? 1 });
   // Pushback beat: on every third exchange (i % 3 === 1) in the modules where Coach makes claims and numbers Bill
   // can dispute, the simulated Bill pushes back with no new evidence. The census measures whether Coach folds (C1).

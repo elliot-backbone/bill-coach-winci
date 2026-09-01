@@ -95,7 +95,13 @@ const FLOOR = /£\s?60\s?k|\b60,?000\b|sixty thousand/i;
 const OUTBOUND = /\bI(?:'ve| have)? (?:just )?(?:sent|emailed|posted|applied|messaged|submitted|scheduled|booked)\b/i;
 const METHOD = /\b(?:search_state|save_coaching_state|review_draft|start_coach|get_context|search_library|the (?:database|state db|scaffold|retrieval|lens(?:es)?)|my (?:tools?|retrieval)|running (?:the|my) (?:method|loop))\b/i;
 const OPTIONS_MENU = /(?:^|\n)\s*(?:option\s*[a-c1-3]|[1-3][.)]\s)[\s\S]*?(?:^|\n)\s*(?:option\s*[a-c1-3]|[1-3][.)]\s)[\s\S]*?(?:which (?:would you|do you) (?:prefer|want)|your call|pick one|choose one|let me know which)/i;
-const PRAISE = /^\s*(?:great|good|excellent|brilliant|smart|sharp|fantastic|love (?:this|that)|that's a (?:really )?(?:great|good|sharp))\b/i;
+// Operator ruling E5 / G-V09, 2026-09-01: a BARE acknowledgement ("Good, catch it now
+// while it's cheap.") is not praise — Coach is not complimenting Bill, it is agreeing and
+// moving to the point, which is the warm London-normal register the covenant asks for.
+// PRAISE is the adjective + a praise NOUN ("Good question", "Sharp catch"), which SP-001
+// blocks outright. The bare form stays SP-023 escalate: surfaced, never counted as a
+// failure. Before this, one bare "Good," per run failed the whole census bound.
+const PRAISE = /^\s*(?:(?:great|good|excellent|brilliant|smart|sharp|fantastic|terrific|superb)\s+(?:question|point|observation|catch|call|insight|thought|idea|read|work|shout|instinct|progress|spot)|love (?:this|that)|that'?s a (?:really |very )?(?:great|good|sharp|smart|excellent|brilliant))\b/i;
 // Imperative asks: a sentence that tells Bill to supply something counts as one ask, question mark or not.
 const IMPERATIVE_ASK = /\b(bring|tell me|give me|send me|walk me through|write (?:me|it) down)\b/i;
 // Voice measures (informational)

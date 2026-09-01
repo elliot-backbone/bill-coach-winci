@@ -52,6 +52,16 @@ const turnsSoFar = () => (fs.existsSync(path.join(laneDir, 'turns.count')) ? fs.
 const NO_MCP = path.join(dirs.work, 'no-mcp.json'); fs.writeFileSync(NO_MCP, '{"mcpServers":{}}');
 const coachCwd = path.join(dirs.work, 'coach'); const billCwd = path.join(dirs.work, 'bill');
 fs.mkdirSync(coachCwd, { recursive: true }); fs.mkdirSync(billCwd, { recursive: true });
+// 2026-09-01 (pilot lane 33469710385): the BILL lane ran under the sealed coach
+// profile's CLAUDE_CONFIG_DIR, so when Claude Code 2.1.252 started firing Stop hooks in
+// print mode, COACH'S OWN GUARDS held the Bill simulator's turns — and the hold text
+// told a session with no coach MCP to submit through review_draft, derailing the whole
+// conversation into a tool argument while every lane measurement stayed green. Bill is
+// simulator infrastructure, not the product: his session gets a bare config dir with no
+// hooks, no settings, no contract. Auth still flows via CLAUDE_CODE_OAUTH_TOKEN in env.
+const BILL_CFG = path.join(dirs.work, 'bill-config');
+fs.mkdirSync(BILL_CFG, { recursive: true });
+fs.writeFileSync(path.join(BILL_CFG, '.claude.json'), '{"hasCompletedOnboarding":true}\n');
 
 // ---------------------------------------------------------------- errors, detailed
 function fail(cls, message, extra = {}) {
@@ -65,6 +75,7 @@ const HINTS = {
   AUTH: 'the sealed profile is not signed in: attach to the lane and run the sign-in relay (protocol §3.4)',
   CAP_REACHED: 'turn cap reached for this lane; raise --cap or add lanes',
   MODE_MISMATCH: 'the plan was sharded for more turns than this runner will produce: dispatch with hard=1 (workflow input), or re-shard the plan without HARD',
+  HOOK_IN_PRINT_MODE: 'Claude Code fired a Stop hook inside a print-mode session; the rig was verified against a version that does not (2.1.251) — pin the CLI version in the workflow or re-verify the hook emulation against this one',
   CLAUDE_START: 'claude could not be spawned: check PATH/PATHEXT and that claude.cmd resolves in cmd.exe',
   CLAUDE_EXIT: 'claude exited non-zero: read turn-NN.stderr and diag/claude-debug/<unit>-turn-NN; MCP traffic is in diag/mcp',
   TIMEOUT: 'the turn exceeded its timeout; the process was killed; the stream so far is in turn-NN.stream.jsonl',
@@ -253,7 +264,7 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
   const args = lane === 'coach'
     ? ['-p', '--setting-sources', 'user', '--tools', 'WebSearch,WebFetch', ...((() => { const f = sessionStartPromptFile(); const pick = f ? (cont ? f.cont : f.first) : (fs.existsSync(SYSTEM_PROMPT) ? SYSTEM_PROMPT : null); return pick ? ['--append-system-prompt-file', pick] : []; })()), '--output-format', 'stream-json', '--verbose', '--debug', ...(cont ? ['--continue'] : [])]
     : ['-p', '--setting-sources', 'user', '--strict-mcp-config', '--mcp-config', NO_MCP, '--output-format', 'stream-json', '--verbose'];
-  const env = sealedEnv({ NODE_OPTIONS: `--import ${JSON.stringify(new URL('mcp-tap.mjs', import.meta.url).href)}`.replace(/"/g, ''), MCP_TAP_LOG: mcpLog });
+  const env = sealedEnv({ NODE_OPTIONS: `--import ${JSON.stringify(new URL('mcp-tap.mjs', import.meta.url).href)}`.replace(/"/g, ''), MCP_TAP_LOG: mcpLog, ...(lane === 'bill' ? { CLAUDE_CONFIG_DIR: BILL_CFG } : {}) });
   const before = snapshot(`${tag}.before`);
   const debugBefore = new Set(fs.existsSync(path.join(PROFILE, 'debug')) ? fs.readdirSync(path.join(PROFILE, 'debug')) : []);
   fs.writeFileSync(`${base}.request.json`, JSON.stringify({ schema: 'bill-coach.turn-request/v1', unitKey, tag, lane, label, cwd, argv: [CLAUDE, ...args], promptSha256: sha(prompt), promptBytes: Buffer.byteLength(prompt), envRedacted: redactedEnv({ CLAUDE_CONFIG_DIR: env.CLAUDE_CONFIG_DIR, NODE_OPTIONS: env.NODE_OPTIONS, MCP_TAP_LOG: env.MCP_TAP_LOG, PATH: env[Object.keys(env).find((k) => k.toUpperCase() === 'PATH')] }), startedAt: now(), stateBefore: before.sha256 }, null, 2));
@@ -278,6 +289,16 @@ function claudeTurn({ lane, prompt, cwd, cont = false, label }) {
     if (ev.type === 'user' && Array.isArray(ev.message?.content)) for (const c of ev.message.content) if (c.type === 'tool_result') toolResults.push({ tool_use_id: c.tool_use_id, is_error: c.is_error ?? false, contentHead: JSON.stringify(c.content).slice(0, 600) });
   }
   fs.writeFileSync(`${base}.stream.jsonl`, events.map((e) => JSON.stringify(e)).join('\n') + (events.length ? '\n' : ''));
+  // 2026-09-01: the rig's Stop-hook emulation is built on the MEASURED fact that hooks
+  // do not fire inside `claude -p` (H8, verified on 2.1.251). Claude Code 2.1.252 broke
+  // that silently. An assumption this load-bearing gets a tripwire, not a comment: real
+  // in-process hook feedback in EITHER lane means the environment drifted and every
+  // downstream measurement is judging a different machine than the one verified —
+  // Bill's turns get held by Coach's guards, Coach's turns get gated twice.
+  if (String(r.stdout ?? '').includes('Stop hook feedback')) {
+    fail('HOOK_IN_PRINT_MODE', `a real Stop hook fired inside the ${lane} lane's print-mode session at ${tag}; the runner's hook emulation assumes it cannot`, { turn: tag, lane });
+    process.exit(2);
+  }
   const reply = result?.result ?? '';
   fs.writeFileSync(`${base}.reply.txt`, reply);
   const debugDir = path.join(dirs.debug, `${unitKey}-${tag}`); fs.mkdirSync(debugDir, { recursive: true });

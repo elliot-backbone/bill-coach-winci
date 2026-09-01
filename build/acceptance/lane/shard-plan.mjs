@@ -21,8 +21,14 @@ if (!out) { console.error('usage: shard-plan.mjs --lanes N --seeds 1,2 --modules
 // The fourteen modules (keys and turn budgets mirror estate/build/full-capture.mjs: opener + 2
 // exchanges + demand = 4 coach turns + 2 bill turns; TIGHT_FIVE 30 exchanges; CV_COACHED 10).
 export const MODULES = ['TIGHT_FIVE', 'CV_COACHED', 'LINKEDIN_LANDING_PAGE', 'CONTENT_PRODUCTION', 'POSITIONING_ONE_PAGER', 'DISCOVERY_PIPELINES', 'OUTREACH_MESSAGES', 'MEETING_RESEARCH_BRIEF', 'REHEARSAL', 'DEBRIEF_REVIEW', 'OFFER_REVIEW', 'NEGOTIATION_MODULE', 'WEEKLY_REVIEW', 'THREAD_PULL'];
-const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_COACHED: Number(process.env.DEEP_CV_COACHED || 6) };
-const turnsForModule = (m) => { const ex = EXCHANGES[m] ?? 2; return 2 + 2 * ex; }; // coach opener+demand + (bill+coach) per exchange
+// 2026-09-01 (operator): MINIMUM 24 TURNS PER MODULE. turnsForModule is 2 + 2*exchanges
+// (coach opener + demand, then a bill+coach pair per exchange), so 11 exchanges is the floor
+// that reaches 24. Before this every module except two ran TWO exchanges — six turns — which
+// is why the census kept reporting that the module lanes barely exercise the conduct half.
+const MIN_EXCHANGES = Number(process.env.MIN_EXCHANGES || 11);
+const EXCHANGES = { TIGHT_FIVE: Number(process.env.DEEP_TIGHT_FIVE || 12), CV_COACHED: Number(process.env.DEEP_CV_COACHED || 11) };
+const exchangesFor = (m) => Math.max(EXCHANGES[m] ?? 0, MIN_EXCHANGES);
+const turnsForModule = (m) => 2 + 2 * exchangesFor(m); // coach opener+demand + (bill+coach) per exchange
 
 const wantModules = opt('--modules', 'all') === 'all' ? MODULES : String(opt('--modules')).split(',');
 const here = path.dirname(new URL(import.meta.url).pathname);

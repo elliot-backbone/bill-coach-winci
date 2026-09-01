@@ -25,7 +25,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { MODULES, billPersona } from './bill-sim.mjs';
+import { MODULES, billPersona, HARD_ROTATION } from './bill-sim.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const IS_WIN = process.platform === 'win32';
@@ -300,7 +300,15 @@ async function runModule() {
   const mod = MODULES.find((m) => m.key === unit.id);
   if (!mod) { fail('CARD_SETUP', `unknown module ${unit.id}`); process.exit(1); }
   const profileJson = fs.existsSync(path.join(DATA, 'coach', 'principal-profile.json')) ? fs.readFileSync(path.join(DATA, 'coach', 'principal-profile.json'), 'utf8') : '{}';
-  const exchanges = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12) : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 6) : Number(process.env.EXCHANGES || 2);
+  // 2026-09-01 (operator): every module runs at least MIN_EXCHANGES, so no module is
+  // shallower than 24 turns (turns = 2 + 2*exchanges). Before this every module except two
+  // ran TWO exchanges — six turns — which is why the census kept reporting that the module
+  // lanes barely exercise the conduct half. The planner uses the identical floor.
+  const MIN_EXCHANGES = Number(process.env.MIN_EXCHANGES || 11);
+  const configured = unit.id === 'TIGHT_FIVE' ? Number(process.env.DEEP_TIGHT_FIVE || 12)
+    : unit.id === 'CV_COACHED' ? Number(process.env.DEEP_CV_COACHED || 11)
+    : Number(process.env.EXCHANGES || 0);
+  const exchanges = Math.max(configured, MIN_EXCHANGES);
   let transcript = ''; const turns = [];
   // asRead: { text, attempts } for coach turns (coachTurn's replyAsRead/attemptCount); undefined for Bill's turns.
   const push = (who, text, meta, holds, asRead) => { turns.push({ who, text, meta, holds, asRead }); transcript += `${who.toUpperCase()}: ${text}\n\n`; fs.writeFileSync(path.join(dirs.turns, 'transcript.md'), transcript); };
@@ -308,7 +316,16 @@ async function runModule() {
   // Pushback beat: on every third exchange (i % 3 === 1) in the modules where Coach makes claims and numbers Bill
   // can dispute, the simulated Bill pushes back with no new evidence. The census measures whether Coach folds (C1).
   const PUSHBACK_MODULES = new Set(['NEGOTIATION_MODULE', 'OFFER_REVIEW', 'CV_COACHED', 'DEBRIEF_REVIEW']);
-  const beatFor = (i) => (PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null);
+  // HARD MODE (operator, 2026-09-01: "Bill extremely challenging in each run, push Coach to
+  // its limits of reasoning and style"). With HARD=1 every exchange carries a beat from the
+  // rotation, so each of the twelve pressures lands at least once in a 24-turn module and no
+  // two consecutive turns apply the same one; the seed offset varies the order across runs.
+  // Off, the original sparse pushback stands.
+  const HARD = process.env.HARD === '1';
+  const beatFor = (i) => {
+    if (HARD) return HARD_ROTATION[(i + (unit.seed ?? 0)) % HARD_ROTATION.length];
+    return PUSHBACK_MODULES.has(mod.key) && i % 3 === 1 ? 'pushback' : null;
+  };
   let r = coachTurn({ prompt: mod.open, cwd: coachCwd, cont: false, label: `${mod.key}-01-open` });
   push('bill', mod.open); push('coach', r.reply, r.meta, r.holds, asReadOf(r)); if (!r.ok) return finishModule(mod, turns, false);
   for (let i = 0; i < exchanges; i += 1) {

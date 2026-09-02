@@ -1,7 +1,7 @@
 // Controller (runs on the operator's Mac): dispatch lanes, find their tmate lines, relay sign-in,
 // watch, collect. Every action is appended to control/<run>.jsonl as it happens.
 //
-//   node lane-control.mjs dispatch --plan <dir> --adapters-ref <sha> [--ref <branch>] [--expected-identity <digest>] [--basis <sha>] [--cap 220] [--minutes 45] [--hard]
+//   node lane-control.mjs dispatch --plan <dir> --adapters-ref <sha> [--ref <branch>] [--expected-identity <digest>] [--basis <sha>] [--cap 220] [--minutes 45] [--hard] [--auth api-key]
 //   node lane-control.mjs ssh-lines --plan <dir>            → prints each lane's run id + ssh line when available
 //   node lane-control.mjs signin --run <id>                 → opens the login flow on the lane over tmate, prints the URL
 //   node lane-control.mjs code --run <id> --code <one-time> → injects the operator's code (never logged)
@@ -41,7 +41,7 @@ if (cmd === 'dispatch') {
     // --hard sets the workflow's `hard` input, which the EXECUTE step exports as HARD=1
     // for unit-runner. Without this flag a hard-mode plan dispatches but runs SOFT —
     // the runner reads only its environment, never the plan.
-    const inputs = ['-f', `lane_manifest=${JSON.stringify(m)}`, '-f', `adapters_ref=${opt('--adapters-ref')}`, '-f', `cap_turns=${opt('--cap', String(m.cap))}`, '-f', `minutes=${opt('--minutes', '45')}`, ...(EXPECTED_IDENTITY ? ['-f', `expected_identity=${EXPECTED_IDENTITY}`] : []), ...(BASIS ? ['-f', `basis=${BASIS}`] : []), ...(argv.includes('--hard') ? ['-f', 'hard=1'] : [])];
+    const inputs = ['-f', `lane_manifest=${JSON.stringify(m)}`, '-f', `adapters_ref=${opt('--adapters-ref')}`, '-f', `cap_turns=${opt('--cap', String(m.cap))}`, '-f', `minutes=${opt('--minutes', '45')}`, ...(EXPECTED_IDENTITY ? ['-f', `expected_identity=${EXPECTED_IDENTITY}`] : []), ...(BASIS ? ['-f', `basis=${BASIS}`] : []), ...(argv.includes('--hard') ? ['-f', 'hard=1'] : []), ...(opt('--auth') ? ['-f', `auth_mode=${opt('--auth')}`] : [])];
     gh(['workflow', 'run', WORKFLOW, '--repo', REPO, '--ref', REF, ...inputs]);
     let runId = null;
     for (let i = 0; i < 12 && !runId; i += 1) { spawnSync('sleep', ['5']); const now = gh(['run', 'list', '--repo', REPO, '--workflow', WORKFLOW, '--limit', '20', '--json', 'databaseId', '-q', '.[].databaseId']).split('\n').filter(Boolean); runId = now.find((id) => !before.has(id)) ?? null; }
